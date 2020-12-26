@@ -1,7 +1,3 @@
-//! An example of how to use a `SpriteBatch`.
-//!
-//! You really want to run this one in release mode.
-
 use ggez;
 use ggez::{event, conf};
 use ggez::graphics;
@@ -435,8 +431,8 @@ impl event::EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         let dt = timer::delta(ctx);
         if timer::ticks(ctx) % 100 == 0 {
-            //println!("Delta frame time: {:?} ", dt);
-            //println!("Average FPS: {}", timer::fps(ctx));
+            println!("Delta frame time: {:?} ", dt);
+            println!("Average FPS: {}", timer::fps(ctx));
         }
         // handle user input
         self.handle_input(ctx);
@@ -550,7 +546,7 @@ pub fn main() -> GameResult {
         .window_mode(
             conf::WindowMode::default()
                 .fullscreen_type(conf::FullscreenType::Windowed)
-                .dimensions(1600.0 , 900.0)
+                .dimensions(1280.0 , 720.0)
         )
         .window_setup(
             conf::WindowSetup::default().samples(
@@ -588,7 +584,7 @@ pub fn main() -> GameResult {
     // in this case the edges are random
     {
         let node_len = state.physics_state.nodes.len() as NId;
-        for _ in 0..100 {
+        for _ in 0..70 {
             let (i, j) = (rng.gen_range(0, node_len), rng.gen_range(0, node_len));
             state.add_edge(i, j);
         }
@@ -600,7 +596,7 @@ pub fn main() -> GameResult {
         for _ in 0..20 {
             state.remove_edge(rng.gen_range(0, state.physics_state.edges.len()) as EId);
         }
-        for _ in 0..14 {
+        for _ in 0..10 {
             state.remove_node(rng.gen_range(0, state.physics_state.nodes.len()) as NId);
         }
     }
