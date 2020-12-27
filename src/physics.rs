@@ -1,7 +1,7 @@
 use ggez::nalgebra::{Point2, Vector2, distance, norm, normalize};
 use ggez::graphics::DrawParam;
 use crate::{ NId, EId };
-use std::slice::Iter;
+use std::slice::{Iter, IterMut};
 
 const SPRING_CONST: f32 = 2.0;
 const NODE_MASS: f32 = 20.0;    // constant for now
@@ -9,35 +9,37 @@ const NODE_FRICTION_FACTOR: f32 = 0.99;
 const TENSION_FACTOR: f32 = 0.75; // = relaxed_length / distance between nodes
 
 pub struct PhysicsState {
-    pub nodes: Vec<Node>,
-    pub edges: Vec<Edge>,
+    nodes: Vec<Node>,
+    edges: Vec<Edge>,
 }
 
 impl PhysicsState {
     pub fn new() -> PhysicsState {
         PhysicsState {
-            //current_index: 0,
-            //inactive_index: 1,
-            //world: PhysicsWorld::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
         }
     }
-    pub fn edge_at(&self, edge_index: EId) -> &Edge {
-        &self.edges[usize::from(edge_index)]
-    }
+    pub fn node_count(&self) -> usize { self.nodes.len() }
+    pub fn edge_count(&self) -> usize { self.edges.len() }
+    pub fn edge_at(&self, edge_index: EId) -> & Edge { &self.edges[usize::from(edge_index)] }
     pub fn edge_at_mut(&mut self, edge_index: EId) -> &mut Edge {
         &mut self.edges[usize::from(edge_index)]
-    }
-    pub fn node_at_mut(&mut self, node_index: NId) -> &mut Node {
-        &mut self.nodes[usize::from(node_index)]
     }
     pub fn node_at(&self, node_index: NId) -> &Node {
         &self.nodes[usize::from(node_index)]
     }
-    //fn current_world() -> &mut PhysicsWorld {
-    //    &mut worlds[current_index]
-    //}
+    pub fn node_at_mut(&mut self, node_index: NId) -> &mut Node {
+        &mut self.nodes[usize::from(node_index)]
+    }
+    /// This is a somewhat ugly workaround for the fact that Rust does not offer partial borrowing
+    pub fn data_mut(&mut self) -> (&mut [Node], &mut [Edge]) {
+        (&mut self.nodes, &mut self.edges)
+    }
+    pub fn node_iter(&self) -> Iter<Node> { self.nodes.iter() }
+    pub fn node_iter_mut(&mut self) -> IterMut<Node> { self.nodes.iter_mut() }
+    pub fn edge_iter(&self) -> Iter<Edge> { self.edges.iter() }
+    pub fn edge_iter_mut(&mut self) -> IterMut<Edge> { self.edges.iter_mut() }
     pub fn add_node(&mut self, position: Point2<f32>) {
         self.nodes.push(Node::new(position));
     }
@@ -90,20 +92,19 @@ impl PhysicsState {
     }
     pub fn remove_edge(&mut self, edge_index: EId) {
         // update the edge-index collection of the nodes connected by the edge
-
+        /*
         let edge = &self.edges[usize::from(edge_index)];
         for i in 0..2 {
             let node_index = edge.node_indices[i];
-            self.nodes[usize::from(node_index)].remove_edge(edge_index);   // second borrow here (safe though since remove_edge cannot invalidate the pointer)
-        }
-
-        /*
-        let edge = self.edge_at(edge_index);
-        for i in 0..2 {
-                let node_index = edge.node_indices[i];
-                self.node_at_mut(node_index).remove_edge(edge_index);   // second borrow here (safe though since remove_edge cannot invalidate the pointer)
+            self.nodes[usize::from(node_index)].remove_edge(edge_index);
         }
         */
+        let (nodes, edges) = self.data_mut();
+        let edge = &edges[usize::from(edge_index)];
+        for i in 0..2 {
+                let node_index = edge.node_indices[i];
+                nodes[usize::from(node_index)].remove_edge(edge_index);   // second borrow here (safe though since remove_edge cannot invalidate the pointer)
+        }
         /*
         let edge: *const Edge = self.edge_at(edge_index);
         for i in 0..2 {
@@ -112,7 +113,7 @@ impl PhysicsState {
                 self.node_at_mut(node_index).remove_edge(edge_index);   // second borrow here (safe though since remove_edge cannot invalidate the pointer)
             }
         }
-         */
+        */
         // remove it from the collection
         self.edges.swap_remove(usize::from(edge_index));
         // if something else than the last edge was removed
@@ -149,6 +150,17 @@ impl PhysicsState {
         let end = self.node_at(edge.other_node(start_node));
 
         end.position - start.position
+    }
+
+    pub fn edge_length_id(&self, e_id: EId) -> f32 {
+        self.edge_length(self.edge_at(e_id))
+    }
+
+    pub fn edge_length(&self, edge: &Edge) -> f32 {
+        let start = self.node_at(edge.node_indices[0]);
+        let end   = self.node_at(edge.node_indices[1]);
+
+        (end.position - start.position).norm()
     }
 }
 
@@ -251,6 +263,9 @@ impl Edge {
         if self.relaxed_length < MIN_LENGTH {
             self.relaxed_length = MIN_LENGTH;
         }
+    }
+    pub fn pos_in_edge(&self, n_id: NId) -> usize {
+        self.node_indices.iter().position(|x| *x == n_id).unwrap()
     }
 
     /// combined_factor is SPRING_CONST * dt / mass
