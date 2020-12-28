@@ -162,8 +162,11 @@ impl MainState {
         self.players.push(PlayerState::new(gamepad_id, color));
         let mut rng = thread_rng();
         // for now choose a random node for the player to start on
-        self.game_state.player_node_ids.push(rng.gen_range(0, self.node_count() as NId));
+        let start_n_id = rng.gen_range(0, self.node_count() as NId);
+        self.game_state.player_node_ids.push(start_n_id);
         self.game_state.player_edge_ids.push(None);
+        // give him some starting units
+        self.game_state.add_units(&self.physics_state, start_n_id, (self.players.len()-1) as PlayerId, 20);
     }
 
     fn identify_or_add_player(&mut self, gamepad_id: GamepadId) -> PlayerId {
@@ -375,7 +378,7 @@ impl event::EventHandler for MainState {
         // Draw the player positions
         for (i, player) in self.players.iter().enumerate() {
             let p = self.draw_param_node(self.game_state.player_node_ids[i])
-                .color(player.color);
+                .color(WHITE);
             self.spr_b_node.add(p);
         }
 
@@ -387,7 +390,7 @@ impl event::EventHandler for MainState {
         for (i, player) in self.players.iter().enumerate() {
             if let Some(edge_id) = self.game_state.player_edge_ids[i] {
                 let p = self.draw_param_edge(usize::from(edge_id))
-                    .color(player.color);
+                    .color(WHITE);
                 self.spr_b_edge.add(p);
             }
         }
@@ -429,21 +432,21 @@ impl event::EventHandler for MainState {
             West => {},
             // "A": start adding a new node/edge or burn units for propulsion (propulsion cell only) (but not here, this is something to check continually)
             // "LB": add selected edge to list of troop destinations (send troops)
-            LeftTrigger2 => {
+            LeftTrigger => {
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     let n_id = self.game_state.player_node_ids[usize::from(player_id)];
                     self.game_state.nodes[usize::from(n_id)].add_troop_path(e_id);
                 }
             }
             // "RB": remove selected edge from list of troop destinations (stop sending troops)
-            RightTrigger2 => {
+            RightTrigger => {
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     let n_id = self.game_state.player_node_ids[usize::from(player_id)];
                     self.game_state.nodes[usize::from(n_id)].remove_troop_path(&e_id);
                 }
             }
             // "LT": increase desired troop count on this node
-            LeftTrigger => {
+            LeftTrigger2 => {
                 let game_node = &mut self.game_state.nodes[usize::from(self.game_state.player_node_ids[usize::from(player_id)])];
                 game_node.set_desired_unit_count(
                     match game_node.desired_unit_count().checked_add(1) {
@@ -453,7 +456,7 @@ impl event::EventHandler for MainState {
                 );
             }
             // "RT": decrease desired troop count on this node
-            RightTrigger => {
+            RightTrigger2 => {
                 let game_node = &mut self.game_state.nodes[usize::from(self.game_state.player_node_ids[usize::from(player_id)])];
                 game_node.set_desired_unit_count(
                     match game_node.desired_unit_count().checked_sub(1) {
