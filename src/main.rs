@@ -11,7 +11,7 @@ use ggez::{Context, GameResult};
 use std::env;
 use std::path;
 use std::time::Instant;
-use crate::physics::{PhysicsState, Node};
+use crate::physics::{PhysicsState, Node, Edge};
 use crate::game_mechanics::*;
 use rand::{Rng, thread_rng};
 use ggez::graphics::{Rect, DrawMode, Image, DrawParam, Drawable, Color, WHITE, BLACK};
@@ -181,12 +181,16 @@ impl MainState {
         player_id
     }
 
-    fn player_color(&self, id: PlayerId) -> &Color {
+    fn player_color(&self, id: PlayerId) -> Color {
+        Self::player_color_static(&self.color_no_player, id, &self.players)
+    }
+
+    fn player_color_static(color_no_player: &Color, id: PlayerId, players: &[PlayerState]) -> Color {
         match id {
-            NO_PLAYER => &self.color_no_player,
-            ANYONE_PLAYER => &WHITE,
-            CANCER_PLAYER => &BLACK,
-            other_id => &self.players[usize::from(other_id)].color
+            NO_PLAYER => *color_no_player,
+            ANYONE_PLAYER => WHITE,
+            CANCER_PLAYER => BLACK,
+            other_id => players[usize::from(other_id)].color
         }
     }
 
@@ -200,20 +204,45 @@ impl MainState {
         DrawParam::new()
             .offset(Point2::new(0.5, 0.5))
             .dest(Point2::new(node.position.x, node.position.y))
-            .color(*self.player_color(self.game_state.nodes[usize::from(n_id)].controlled_by()))
+            .color(self.player_color(self.game_state.nodes[usize::from(n_id)].controlled_by()))
     }
 
-    fn draw_param_edge(&self, e_id: usize) -> DrawParam {
-        let edge = &self.physics_state.edge_at(e_id as EId);
-        let (node1, node2) = (&self.physics_state.node_at(edge.node_indices[0]), &self.physics_state.node_at(edge.node_indices[1]));
+    fn draw_param_edge(&self, edge: &Edge, g_edge: &GameEdge) -> DrawParam {
+        let (node1, node2) = (self.physics_state.node_at(edge.node_indices[0]), self.physics_state.node_at(edge.node_indices[1]));
         let vec: Vector2<f32> = node2.position - node1.position;
+        let rotation = na::RealField::atan2(vec.y, vec.x);
 
         DrawParam::new()
             .offset(Point2::new(0.0, 0.5))
             .dest(Point2::new(node1.position.x, node1.position.y))
-            .rotation(na::RealField::atan2(vec.y, vec.x))
+            .rotation(rotation)
             .scale(Vector2::new(vec.norm() / self.edge_sprite_width, 1.0))
-            .color(*self.player_color(self.game_state.edges[e_id].controlled_by()))
+            .color(self.player_color(g_edge.controlled_by()))
+    }
+
+    fn draw_edge(players: &[PlayerState], spr_width: f32, no_player_color: &Color, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge) {
+        let (node1, node2) = (physics_state.node_at(edge.node_indices[0]),physics_state.node_at(edge.node_indices[1]));
+        let vec: Vector2<f32> = node2.position - node1.position;
+        let rotation = na::RealField::atan2(vec.y, vec.x);
+        // draw the edge
+        spr_batch_edge.add(DrawParam::new()
+            .offset(Point2::new(0.0, 0.5))
+            .dest(Point2::new(node1.position.x, node1.position.y))
+            .rotation(rotation)
+            .scale(Vector2::new(vec.norm() / spr_width, 1.0))
+            .color(Self::player_color_static(no_player_color, g_edge.controlled_by(), players))
+        );
+        // calculate the troop positions based on the starting point of the edge and the advancement of the troops
+        for adv_troop in g_edge.troop_iter() {
+            let pos = node1.position + vec * adv_troop.advancement;
+            spr_batch_troop.add(DrawParam::new()
+                .offset(Point2::new(0.5, 0.5))
+                .dest(pos)
+                .rotation(rotation)
+                .scale(Vector2::new(0.5, 0.5))
+                .color(Self::player_color_static(no_player_color,adv_troop.troop.player, players))
+            );
+        }
     }
 
     fn handle_input(&mut self, ctx: &mut Context) {
@@ -244,21 +273,25 @@ impl MainState {
                     let e_angle = vec.y.atan2(vec.x);
                     const SELECTED_EDGE_PRIORITY_DIFF: f32 = 1.5;
                     if angle_diff_abs(e_angle, angle) < SELECTED_EDGE_PRIORITY_DIFF {
-                        chosen_node = self.physics_state.edge_at(pl_edge_id).other_node(p_node_id);
+                        let node = self.physics_state.edge_at(pl_edge_id).other_node(p_node_id);
+                        if self.game_state.nodes[usize::from(node)].player_can_access(player_id as PlayerId) {
+                            chosen_node = self.physics_state.edge_at(pl_edge_id).other_node(p_node_id);
+                        }
                     }
                 }
                 if chosen_node == NO_NODE {
                     // go through all edges of the node and find the edge and associated neighbor node closest to the chosen angle
                     let mut smallest_diff: f32 = 1.5;  // the worst fit still needs to be better than this
-                    let mut chosen_edge = NO_EDGE;
                     for e_id in p_node.edge_indices.iter() {
                         let vec = self.physics_state.edge_vec_2d(*e_id, p_node_id);
                         let edge_angle = vec.y.atan2(vec.x);
                         let difference = angle_diff_abs(edge_angle, angle);
                         if difference < smallest_diff {
-                            smallest_diff = difference;
-                            chosen_node = self.physics_state.edge_at(*e_id).other_node(p_node_id);
-                            chosen_edge = *e_id;
+                            let node = self.physics_state.edge_at(*e_id).other_node(p_node_id);
+                            if self.game_state.nodes[usize::from(node)].player_can_access(player_id as PlayerId) {
+                                smallest_diff = difference;
+                                chosen_node = node;
+                            }
                         }
                     }
                 }
@@ -282,7 +315,7 @@ impl MainState {
                 let angle = y.atan2(x);
                 // get the node where the player is currently at
                 let p_node_id = self.game_state.player_node_ids[player_id];
-                let p_node = &self.physics_state.node_at(p_node_id);
+                let p_node = self.physics_state.node_at(p_node_id);
                 // go through all edges of the node and find the edge and associated neighbor node closest to the chosen angle
                 let mut smallest_diff: f32 = 1.5;  // the worst fit still needs to be better than this
                 let mut chosen_node = NO_NODE;
@@ -383,13 +416,18 @@ impl event::EventHandler for MainState {
         }
 
         // Fill the edges spritebatch
-        for (i, _edge) in self.physics_state.edge_iter().enumerate() {
-            self.spr_b_edge.add(self.draw_param_edge(i));
+        {
+            let mut g_edge_iter = self.game_state.edges.iter();
+            for edge in self.physics_state.edge_iter() {
+                let g_edge = g_edge_iter.next().unwrap();
+                Self::draw_edge(&self.players, self.edge_sprite_width, &self.color_no_player, &self.physics_state,
+                                &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge);
+            }
         }
         // Draw the edges chosen by the players
-        for (i, player) in self.players.iter().enumerate() {
+        for (i, _player) in self.players.iter().enumerate() {
             if let Some(edge_id) = self.game_state.player_edge_ids[i] {
-                let p = self.draw_param_edge(usize::from(edge_id))
+                let p = self.draw_param_edge(self.physics_state.edge_at(edge_id), &self.game_state.edges[usize::from(edge_id)])
                     .color(WHITE);
                 self.spr_b_edge.add(p);
             }

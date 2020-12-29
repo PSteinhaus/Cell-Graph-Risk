@@ -5,6 +5,7 @@ use smallvec::{SmallVec, smallvec};
 use crate::physics::PhysicsState;
 use crate::helpers::*;
 use core::slice::IterMut;
+use std::slice::Iter;
 
 pub struct GameState {
     /// on which node each player currently is
@@ -182,6 +183,21 @@ impl EdgeFight {
         self.fight.advance(EdgeFightTroopIterator::new(self.troops.iter_mut()), dt);
     }
 
+    /// Returns the last troop standing if there is only one left
+    // TODO: call this function to determine whether this EdgeFight can be disbanded,
+    // sending the remaining troop back on track
+    fn winner(&self) -> Option<(usize, Troop)> {
+        let troop_count_per_direction = [self.troops[0].len(), self.troops[1].len()];
+        if troop_count_per_direction[0] == 1 && troop_count_per_direction[1] == 0 {
+            // direction 0 has won
+            return Some((0, self.troops[0][0]));
+        } else if troop_count_per_direction[0] == 0 && troop_count_per_direction[1] == 1 {
+            // direction 1 has won
+            return Some((1, self.troops[1][0]));
+        }
+        None
+    }
+
     fn add_troop(&mut self, i: usize, new_troop: &mut Troop) -> UnitCount {
         let mut added_units: UnitCount = 0;
         // search for allied troops
@@ -233,16 +249,37 @@ impl<'a> Iterator for EdgeFightTroopIterator<'a> {
     }
 }
 
-struct AdvancingTroop {
-    troop: Troop,
-    advancement: f32,
+pub struct EdgeTroopIter<'a> {
+    vec_iter: Iter<'a, Vec<AdvancingTroop>>,
+    troop_iter: Iter<'a, AdvancingTroop>,
+}
+
+impl<'a> Iterator for EdgeTroopIter<'a> {
+    type Item = &'a AdvancingTroop;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(troop) = self.troop_iter.next() {
+            Some(troop)
+        } else if let Some(s_vec) = self.vec_iter.next() {
+            // go to the next direction
+            self.troop_iter = s_vec.iter();
+            self.next()
+        } else {
+            None
+        }
+    }
+}
+
+pub struct AdvancingTroop {
+    pub troop: Troop,
+    pub advancement: f32,
 }
 
 impl AdvancingTroop {
-    fn new(troop: Troop) -> AdvancingTroop {
+    fn new(troop: Troop, start_index: usize) -> AdvancingTroop {
         AdvancingTroop {
             troop,
-            advancement: 0.0
+            advancement: if start_index == 0 { 0.0 } else { 1.0 }
         }
     }
 }
@@ -257,7 +294,13 @@ impl GameEdge {
 
     fn add_troop(&mut self, start_index: usize, p_id: PlayerId, amount: UnitCount) {
         if amount == 0 { return; }
-        self.advancing_troops[start_index].push(AdvancingTroop::new(Troop { count: amount, player: p_id }))
+        self.advancing_troops[start_index].push(AdvancingTroop::new(Troop { count: amount, player: p_id }, start_index))
+    }
+
+    pub fn troop_iter(&self) -> EdgeTroopIter {
+        let mut vec_iter = self.advancing_troops.iter();
+        let troop_iter = vec_iter.next().unwrap().iter();
+        EdgeTroopIter { vec_iter, troop_iter }
     }
 
     fn advance_fights(&mut self, dt: f32) {
@@ -413,9 +456,9 @@ impl GameEdge {
 
 /// holds the unit-count and the player owning these units
 #[derive(Copy, Clone)]
-struct Troop {
-    count: UnitCount,
-    player: PlayerId
+pub struct Troop {
+    pub count: UnitCount,
+    pub player: PlayerId
 }
 
 impl Troop {
@@ -508,6 +551,7 @@ impl GameNode {
     fn advance_fight(&mut self, dt: f32) -> bool {
         if let Some(active_fight) = &mut self.fight {
             active_fight.advance(self.troops.iter_mut(), dt);
+            // TODO: check for a winner and end the fight
             return true;
         }
         false
