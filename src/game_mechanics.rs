@@ -1,11 +1,13 @@
 use crate::{NId, EId, PlayerId, NO_PLAYER, UnitCount, MAX_UNIT_COUNT};
 use std::collections::BTreeSet;
 use ggez::nalgebra::clamp;
-use smallvec::{SmallVec, smallvec};
+use smallvec::{SmallVec};
 use crate::physics::PhysicsState;
 use crate::helpers::*;
 use core::slice::IterMut;
 use std::slice::Iter;
+use rand::{thread_rng, Rng};
+use rand::seq::SliceRandom;
 
 pub struct GameState {
     /// on which node each player currently is
@@ -26,6 +28,12 @@ impl GameState {
             edges: Vec::new(),
             troop_distribution_timer: Timer::new(),
         }
+    }
+    pub fn player_node(&self, p_id: PlayerId) -> &GameNode {
+        &self.nodes[usize::from(self.player_node_ids[usize::from(p_id)])]
+    }
+    pub fn player_node_mut(&mut self, p_id: PlayerId) -> &mut GameNode {
+        &mut self.nodes[usize::from(self.player_node_ids[usize::from(p_id)])]
     }
     pub fn add_node(&mut self) {
         self.nodes.push(GameNode::new());
@@ -84,10 +92,19 @@ impl GameState {
     pub fn update(&mut self, physics_state: &PhysicsState, dt: f32) {
         // update all nodes
         let distribute_troops = self.check_for_troop_distribution(dt);
+        // collect the nodes that switch their control along the way
+        let mut control_changed_nodes = SmallVec::<[NId; 32]>::new();
         use CellType::*;
         for (n_id, node) in self.nodes.iter_mut().enumerate() {
             // first manage possible fights
-            let fighting = node.advance_fight(dt);
+            if node.fighting() {
+                let fight_ended = node.advance_fight(dt);
+                if fight_ended {
+                    // a control change has happened, update the edges of this node
+                    control_changed_nodes.push(n_id as NId);
+                }
+            }
+
             match node.cell_type() {
                 Basic => {
 
@@ -116,9 +133,9 @@ impl GameState {
             }
         }
         // update all edges
-        let mut control_changed_nodes = SmallVec::<[NId; 32]>::new();  // collect the nodes that switch their control along the way
         for (e_id, edge) in self.edges.iter_mut().enumerate() {
             edge.advance_troops(&mut self.nodes, physics_state, &mut control_changed_nodes, e_id as EId, dt);
+            edge.advance_fights(dt);
         }
         // recalculate the edge control values for all edges of the control changed nodes
         for n_id in control_changed_nodes.iter() {
@@ -141,7 +158,7 @@ pub struct GameEdge {
     controlled_by: PlayerId,
     /// If there is a fight on this edge it is found in one of these two Options, measured in relative advancement from node1 to node2
     /// There can only ever at most be 2 fights at once (if fights occur whenever troops are controlled by different players, that is)
-    fights: SmallVec<[EdgeFight; 2]>,
+    pub fights: SmallVec<[EdgeFight; 2]>,
 }
 
 struct Fight {
@@ -158,16 +175,49 @@ impl<'a> Fight {
     fn advance<I: Iterator<Item = &'a mut Troop>>(&mut self, troop_iter_mut: I, dt: f32) {
         const DURATION_BETWEEN_BATTLES: f32 = 2.0;
         if self.battle_timer.check(dt, DURATION_BETWEEN_BATTLES) {
-            // TODO: let the troops battle each other
+            // let the troops battle each other
+            let mut troops: SmallVec<[&mut Troop; 8]> = troop_iter_mut.collect();
+            // get a (randomly shuffled) turn order
+            troops.shuffle(&mut thread_rng());
+            // let one after the other attack
+            let mut i = 0;
+            let last_defender_index = troops.len() - 1;
+            println!("BATTLING");
+            while i < last_defender_index {
+                // calculate the attack (for now let it be 1)
+                let my_attack = 1;
+                let other_attack = 1;
+                // flip a coin to see if you win the encounter
+                if thread_rng().gen_bool(0.5) {
+                    // you win, damage the other
+                    troops[i+1].count = troops[i+1].count.saturating_sub(my_attack);
+                    println!("count: {}", troops[i+1].count);
+                } else {
+                    // the other one wins, let him damage you
+                    troops[i].count = troops[i].count.saturating_sub(other_attack);
+                    println!("count: {}", troops[i].count);
+                }
+                // the next one has already fought, so skip him
+                i += 2;
+            }
+        }
+    }
 
+    fn winner<I: Iterator<Item = &'a Troop>>(mut troop_iter: I) -> Option<&'a Troop> {
+        // if only one is standing return this troop
+        let first_troop_alive = troop_iter.find(|troop| troop.count != 0).unwrap();
+        if let Some(other_troop) = troop_iter.find(|troop| troop.count != 0) {
+            return None;
+        } else {
+            return Some(first_troop_alive);
         }
     }
 }
 
-struct EdgeFight {
+pub struct EdgeFight {
     troops: [SmallVec<[Troop; 2]>; 2],
     fight: Fight,
-    advancement: f32,
+    pub advancement: f32,
 }
 
 impl EdgeFight {
@@ -179,12 +229,20 @@ impl EdgeFight {
         }
     }
 
+    fn remove_empty_troops(&mut self) {
+        for vec in self.troops.iter_mut() {
+            vec.retain(|troop| troop.count != 0);
+        }
+    }
+
     fn advance_fight(&mut self, dt: f32) {
-        self.fight.advance(EdgeFightTroopIterator::new(self.troops.iter_mut()), dt);
+        self.fight.advance(EdgeFightTroopIteratorMut::new(self.troops.iter_mut()), dt);
+        // remove all troops from the fight that have lost all units
+        self.remove_empty_troops();
     }
 
     /// Returns the last troop standing if there is only one left
-    // TODO: call this function to determine whether this EdgeFight can be disbanded,
+    // call this function to determine whether this EdgeFight can be disbanded,
     // sending the remaining troop back on track
     fn winner(&self) -> Option<(usize, Troop)> {
         let troop_count_per_direction = [self.troops[0].len(), self.troops[1].len()];
@@ -219,13 +277,13 @@ impl EdgeFight {
 }
 
 struct EdgeFightTroopIterator<'a> {
-    vec_iter: IterMut<'a, SmallVec<[Troop; 2]>>,
-    troop_iter: IterMut<'a, Troop>
+    vec_iter: Iter<'a, SmallVec<[Troop; 2]>>,
+    troop_iter: Iter<'a, Troop>
 }
 
 impl EdgeFightTroopIterator<'_> {
-    fn new(mut vec_iter: IterMut<SmallVec<[Troop; 2]>>) -> EdgeFightTroopIterator {
-        let t_iter = vec_iter.next().unwrap().iter_mut();
+    fn new(mut vec_iter: Iter<SmallVec<[Troop; 2]>>) -> EdgeFightTroopIterator {
+        let t_iter = vec_iter.next().unwrap().iter();
         EdgeFightTroopIterator {
             vec_iter,
             troop_iter: t_iter,
@@ -234,6 +292,37 @@ impl EdgeFightTroopIterator<'_> {
 }
 
 impl<'a> Iterator for EdgeFightTroopIterator<'a> {
+    type Item = &'a Troop;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(troop) = self.troop_iter.next() {
+            Some(troop)
+        } else if let Some(s_vec) = self.vec_iter.next() {
+            // go to the next direction
+            self.troop_iter = s_vec.iter();
+            self.next()
+        } else {
+            None
+        }
+    }
+}
+
+struct EdgeFightTroopIteratorMut<'a> {
+    vec_iter: IterMut<'a, SmallVec<[Troop; 2]>>,
+    troop_iter: IterMut<'a, Troop>
+}
+
+impl EdgeFightTroopIteratorMut<'_> {
+    fn new(mut vec_iter: IterMut<SmallVec<[Troop; 2]>>) -> EdgeFightTroopIteratorMut {
+        let t_iter = vec_iter.next().unwrap().iter_mut();
+        EdgeFightTroopIteratorMut {
+            vec_iter,
+            troop_iter: t_iter,
+        }
+    }
+}
+
+impl<'a> Iterator for EdgeFightTroopIteratorMut<'a> {
     type Item = &'a mut Troop;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -297,6 +386,31 @@ impl GameEdge {
         self.advancing_troops[start_index].push(AdvancingTroop::new(Troop { count: amount, player: p_id }, start_index))
     }
 
+    fn add_troop_advanced(&mut self, start_index: usize, troop: Troop, advancement: f32) {
+        // add them so that the vector remains sorted
+        let mut not_inserted = true;
+        if start_index == 0 {
+            for i in (0..self.advancing_troops[start_index].len()).rev() {
+                if self.advancing_troops[start_index][i].advancement > advancement {
+                    self.advancing_troops[start_index].insert(i, AdvancingTroop { troop, advancement });
+                    not_inserted = false;
+                    break;
+                }
+            }
+        } else {
+            for i in (0..self.advancing_troops[start_index].len()).rev() {
+                if self.advancing_troops[start_index][i].advancement < advancement {
+                    self.advancing_troops[start_index].insert(i, AdvancingTroop { troop, advancement });
+                    not_inserted = false;
+                    break;
+                }
+            }
+        }
+        if not_inserted {
+            self.advancing_troops[start_index].push(AdvancingTroop { troop, advancement });
+        }
+    }
+
     pub fn troop_iter(&self) -> EdgeTroopIter {
         let mut vec_iter = self.advancing_troops.iter();
         let troop_iter = vec_iter.next().unwrap().iter();
@@ -306,6 +420,16 @@ impl GameEdge {
     fn advance_fights(&mut self, dt: f32) {
         for fight in self.fights.iter_mut() {
             fight.advance_fight(dt);
+        }
+        let mut winners = SmallVec::<[(usize,Troop,f32); 2]>::new();
+        self.fights.retain(|fight| -> bool {
+            if let Some((st_index, troop)) = fight.winner() { winners.push((st_index, troop, fight.advancement)); false }
+            else { true }
+        });
+        for w in winners {
+            // add them to the edge
+            println!("adding winner");
+            self.add_troop_advanced(w.0, w.1, w.2);
         }
     }
 
@@ -548,11 +672,20 @@ impl GameNode {
         self.set_controlled_by(NO_PLAYER);
     }
 
+    fn fighting(&self) -> bool { self.fight.is_some() }
+
+    /// Returns whether the fight has ended (signaling the need for an update of the neighboring edges)
     fn advance_fight(&mut self, dt: f32) -> bool {
         if let Some(active_fight) = &mut self.fight {
             active_fight.advance(self.troops.iter_mut(), dt);
-            // TODO: check for a winner and end the fight
-            return true;
+            // check for a winner and end the fight
+            if let Some(winning_troop) = Fight::winner(self.troops.iter()) {
+                // hand control over to the new player
+                self.set_controlled_by(winning_troop.player);
+                // stop the fight
+                self.fight = None;
+                return true;
+            }
         }
         false
     }
@@ -606,6 +739,9 @@ impl GameNode {
     }
     pub fn remove_troop_path(&mut self, path: &EId) {
         self.troop_send_paths.remove(&path);
+    }
+    pub fn clear_troop_paths(&mut self) {
+        self.troop_send_paths.clear();
     }
     pub fn controlled_by(&self) -> PlayerId { self.controlled_by }
     pub fn cell_type(&self) -> &CellType { &self.cell_type }

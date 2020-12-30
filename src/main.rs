@@ -10,15 +10,16 @@ use ggez::timer;
 use ggez::{Context, GameResult};
 use std::env;
 use std::path;
-use std::time::Instant;
 use crate::physics::{PhysicsState, Node, Edge};
 use crate::game_mechanics::*;
 use rand::{Rng, thread_rng};
 use ggez::graphics::{Rect, DrawMode, Image, DrawParam, Drawable, Color, WHITE, BLACK};
 use ggez::graphics::spritebatch::SpriteBatch;
-use ggez::input::gamepad::{GamepadId, gamepad};
+use ggez::input::gamepad::{GamepadId, gamepad, Gamepad};
 use ggez::event::{Button, Axis};
-use crate::helpers::angle_diff_abs;
+use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16};
+use ggez::input::gamepad::gilrs::ev::Code;
+use std::convert::TryFrom;
 
 mod physics;
 mod game_mechanics;
@@ -43,7 +44,6 @@ struct MainState {
     edge_sprite_width: f32,
     spr_b_node: SpriteBatch,
     spr_b_edge: SpriteBatch,
-    color_no_player: Color
 }
 
 impl MainState {
@@ -56,7 +56,6 @@ impl MainState {
             edge_sprite_width: img.width() as f32,
             spr_b_node: SpriteBatch::new(Image::new(ctx, "/node.png").unwrap()),
             spr_b_edge: SpriteBatch::new(img),
-            color_no_player: Color::from_rgb(110, 110, 110),
         }
     }
 
@@ -182,12 +181,16 @@ impl MainState {
     }
 
     fn player_color(&self, id: PlayerId) -> Color {
-        Self::player_color_static(&self.color_no_player, id, &self.players)
+        Self::player_color_static(id, &self.players)
     }
 
-    fn player_color_static(color_no_player: &Color, id: PlayerId, players: &[PlayerState]) -> Color {
+    fn color_no_player() -> Color {
+        Color::new(0.6, 0.6, 0.6, 1.0)
+    }
+
+    fn player_color_static(id: PlayerId, players: &[PlayerState]) -> Color {
         match id {
-            NO_PLAYER => *color_no_player,
+            NO_PLAYER => Self::color_no_player(),
             ANYONE_PLAYER => WHITE,
             CANCER_PLAYER => BLACK,
             other_id => players[usize::from(other_id)].color
@@ -195,7 +198,11 @@ impl MainState {
     }
 
     fn player_node(&self, id: PlayerId) -> &Node {
-        &self.physics_state.node_at(self.game_state.player_node_ids[usize::from(id)])
+        self.physics_state.node_at(self.game_state.player_node_ids[usize::from(id)])
+    }
+
+    fn player_node_mut(&mut self, id: PlayerId) -> &mut Node {
+        self.physics_state.node_at_mut(self.game_state.player_node_ids[usize::from(id)])
     }
 
     fn draw_param_node(&self, n_id: NId) -> DrawParam {
@@ -220,7 +227,7 @@ impl MainState {
             .color(self.player_color(g_edge.controlled_by()))
     }
 
-    fn draw_edge(players: &[PlayerState], spr_width: f32, no_player_color: &Color, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge) {
+    fn draw_edge(players: &[PlayerState], spr_width: f32, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge) {
         let (node1, node2) = (physics_state.node_at(edge.node_indices[0]),physics_state.node_at(edge.node_indices[1]));
         let vec: Vector2<f32> = node2.position - node1.position;
         let rotation = na::RealField::atan2(vec.y, vec.x);
@@ -230,7 +237,7 @@ impl MainState {
             .dest(Point2::new(node1.position.x, node1.position.y))
             .rotation(rotation)
             .scale(Vector2::new(vec.norm() / spr_width, 1.0))
-            .color(Self::player_color_static(no_player_color, g_edge.controlled_by(), players))
+            .color(Self::player_color_static(g_edge.controlled_by(), players))
         );
         // calculate the troop positions based on the starting point of the edge and the advancement of the troops
         for adv_troop in g_edge.troop_iter() {
@@ -238,18 +245,46 @@ impl MainState {
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
                 .dest(pos)
-                .rotation(rotation)
                 .scale(Vector2::new(0.5, 0.5))
-                .color(Self::player_color_static(no_player_color,adv_troop.troop.player, players))
+                .color(Self::player_color_static(adv_troop.troop.player, players))
+            );
+        }
+        // draw the fights
+        for fight in g_edge.fights.iter() {
+            let pos = node1.position + vec * fight.advancement;
+            spr_batch_troop.add(DrawParam::new()
+                .offset(Point2::new(0.5, 0.5))
+                .dest(pos)
+                .scale(Vector2::new(0.75, 0.75))
+                .color(Self::color_no_player())
             );
         }
     }
 
     fn handle_input(&mut self, ctx: &mut Context) {
+        let dt = timer::delta(ctx).as_secs_f32();
         for (player_id, player) in self.players.iter_mut().enumerate() {
             // get the gamepad
             let gamepad = gamepad(ctx, player.gamepad_id);
-
+            // advance the duration that the pressed buttons have been pressed
+            for button_code in 1..20u16 {
+                let button = u16_to_btn(button_code).unwrap();
+                if gamepad.is_pressed(button) {
+                    player.increase_button_pressed_duration(button, dt);
+                }
+            }
+            // if LB is pressed for some time add all edges to the list of edges to distribute to
+            const DISTRIBUTION_TRIGGER_DURATION: f32 = 1.0;
+            if player.pressed_for_at_least(Button::LeftTrigger, DISTRIBUTION_TRIGGER_DURATION) {
+                let p_node_id = self.game_state.player_node_ids[usize::from(player_id)];
+                for e_id in self.physics_state.node_at(p_node_id).edge_indices.iter() {
+                    self.game_state.player_node_mut(player_id as PlayerId).add_troop_path(*e_id);
+                }
+            }
+            // if RB is pressed for some time remove all edges from the list of edges to distribute to
+            if player.pressed_for_at_least(Button::RightTrigger, DISTRIBUTION_TRIGGER_DURATION) {
+                self.game_state.player_node_mut(player_id as PlayerId).clear_troop_paths();
+            }
             // handle stick input
             use Axis::*;
             const DEADZONE: f32 = 0.75;
@@ -261,7 +296,7 @@ impl MainState {
                 player.remove_left_axis_cooldown();
                 stick_active = false;
             }
-            if stick_active && player.try_left_axis_cooldown(timer::delta(ctx).as_secs_f32()) {
+            if stick_active && player.try_left_axis_cooldown(dt) {
                 let angle = y.atan2(x);
                 // get the node where the player is currently at
                 let p_node_id = self.game_state.player_node_ids[player_id];
@@ -353,7 +388,8 @@ impl MainState {
 struct PlayerState {
     color: Color,
     gamepad_id: GamepadId,
-    left_axis_cooldown: f32
+    left_axis_cooldown: f32,
+    gamepad_pressed_timers: [f32; 20] // because there are 20 buttons
 }
 
 impl PlayerState {
@@ -361,7 +397,8 @@ impl PlayerState {
         PlayerState {
             color,
             gamepad_id,
-            left_axis_cooldown: 0.0
+            left_axis_cooldown: 0.0,
+            gamepad_pressed_timers: [0.0; 20]
         }
     }
     /// Advances the cooldown timer dt seconds and returns true if the cooldown is done.
@@ -377,6 +414,15 @@ impl PlayerState {
     }
     fn remove_left_axis_cooldown(&mut self) {
         self.left_axis_cooldown = 0.0;
+    }
+    fn pressed_for_at_least(&self, button: Button, duration: f32) -> bool {
+        self.gamepad_pressed_timers[usize::from(btn_to_u16(button))] >= duration
+    }
+    fn increase_button_pressed_duration(&mut self, button: Button, duration: f32) {
+        self.gamepad_pressed_timers[usize::from(btn_to_u16(button))] += duration;
+    }
+    fn reset_button_pressed_duration(&mut self, button: Button) {
+        self.gamepad_pressed_timers[usize::from(btn_to_u16(button))] = 0.0;
     }
 }
 
@@ -420,7 +466,7 @@ impl event::EventHandler for MainState {
             let mut g_edge_iter = self.game_state.edges.iter();
             for edge in self.physics_state.edge_iter() {
                 let g_edge = g_edge_iter.next().unwrap();
-                Self::draw_edge(&self.players, self.edge_sprite_width, &self.color_no_player, &self.physics_state,
+                Self::draw_edge(&self.players, self.edge_sprite_width, &self.physics_state,
                                 &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge);
             }
         }
@@ -513,6 +559,7 @@ impl event::EventHandler for MainState {
 
     fn gamepad_button_up_event(&mut self, ctx: &mut Context, btn: Button, id: GamepadId) {
         let player_id = self.identify_or_add_player(id);
+        self.players[usize::from(player_id)].reset_button_pressed_duration(btn);
     }
     fn resize_event(&mut self, ctx: &mut Context, width: f32, height: f32) {
         println!("Resized screen to {}, {}", width, height);
@@ -551,7 +598,7 @@ pub fn main() -> GameResult {
     // add some nodes
     let mut rng = rand::thread_rng();
 
-    for _ in 0..50 {
+    for _ in 0..10 {
         state.add_node(Point2::new(rng.gen_range(100.0, 3740.0), rng.gen_range(100.0, 2060.0)));
     }
     //state.add_node(Point2::new(0.0, 0.0));
@@ -574,13 +621,14 @@ pub fn main() -> GameResult {
     // in this case the edges are random
     {
         let node_len = state.physics_state.node_count() as NId;
-        for _ in 0..100 {
+        for _ in 0..20 {
             let (i, j) = (rng.gen_range(0, node_len), rng.gen_range(0, node_len));
             state.add_edge(i, j);
         }
     }
 
     // Now let's remove some stuff (for test purposes)
+    /*
     {
         //state.remove_edge(0);
         for _ in 0..20 {
@@ -590,6 +638,7 @@ pub fn main() -> GameResult {
             state.remove_node(rng.gen_range(0, state.physics_state.node_count()) as NId);
         }
     }
+    */
     // Remove all nodes without edges (for beauty purposes)
     {
         let mut i = 0;
