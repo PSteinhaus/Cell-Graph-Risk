@@ -435,12 +435,17 @@ impl event::EventHandler for MainState {
         }
         // handle user input
         self.handle_input(ctx);
-        // update the game state
-        self.game_state.update(&self.physics_state, dt.as_secs_f32());
-        // update the physics simulation
+
         const DESIRED_SIMULATION_FPS: u32 = 60;
+        const DESIRED_DELTA: f32 = 1.0 / (DESIRED_SIMULATION_FPS as f32);
         while timer::check_update_time(ctx, DESIRED_SIMULATION_FPS) {
-            self.physics_state.simulate_step(dt.as_secs_f32());
+            let secs = dt.as_secs_f32();
+            let ratio = (DESIRED_DELTA / secs) * thread_rng().gen_range(0.997, 1.003);
+            let dur = ratio * secs;
+            // update the game state
+            self.game_state.update(&self.physics_state, dur);
+            // update the physics simulation
+            self.physics_state.simulate_step(dur);
         }
         // TODO: iterate over gamepads from time to time and check whether they're still connected;
         //       if not remove the player associated with the pad in question;
@@ -450,17 +455,27 @@ impl event::EventHandler for MainState {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, graphics::Color::from((80u8, 80u8, 80u8)));
 
+        // Draw the player positions
+        for (i, _player) in self.players.iter().enumerate() {
+            let p = self.draw_param_node(self.game_state.player_node_ids[i])
+                .scale(Vector2::new(1.25, 1.25))
+                .color(WHITE);
+            self.spr_b_node.add(p);
+        }
         // Fill the nodes spritebatch
         for (i, _node) in self.physics_state.node_iter().enumerate() {
             self.spr_b_node.add(self.draw_param_node(i as NId));
         }
-        // Draw the player positions
-        for (i, player) in self.players.iter().enumerate() {
-            let p = self.draw_param_node(self.game_state.player_node_ids[i])
-                .color(WHITE);
-            self.spr_b_node.add(p);
-        }
 
+        // Draw the edges chosen by the players
+        for (i, _player) in self.players.iter().enumerate() {
+            if let Some(edge_id) = self.game_state.player_edge_ids[i] {
+                let mut p = self.draw_param_edge(self.physics_state.edge_at(edge_id), &self.game_state.edges[usize::from(edge_id)])
+                    .color(WHITE);
+                p.scale.y *= 2.0;
+                self.spr_b_edge.add(p);
+            }
+        }
         // Fill the edges spritebatch
         {
             let mut g_edge_iter = self.game_state.edges.iter();
@@ -468,14 +483,6 @@ impl event::EventHandler for MainState {
                 let g_edge = g_edge_iter.next().unwrap();
                 Self::draw_edge(&self.players, self.edge_sprite_width, &self.physics_state,
                                 &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge);
-            }
-        }
-        // Draw the edges chosen by the players
-        for (i, _player) in self.players.iter().enumerate() {
-            if let Some(edge_id) = self.game_state.player_edge_ids[i] {
-                let p = self.draw_param_edge(self.physics_state.edge_at(edge_id), &self.game_state.edges[usize::from(edge_id)])
-                    .color(WHITE);
-                self.spr_b_edge.add(p);
             }
         }
 
@@ -491,7 +498,7 @@ impl event::EventHandler for MainState {
         Ok(())
     }
 
-    fn gamepad_button_down_event(&mut self, ctx: &mut Context, btn: Button, id: GamepadId) {
+    fn gamepad_button_down_event(&mut self, _ctx: &mut Context, btn: Button, id: GamepadId) {
         let player_id = self.identify_or_add_player(id);
         use Button::*;
         // plan for control layout:
@@ -557,7 +564,7 @@ impl event::EventHandler for MainState {
         }
     }
 
-    fn gamepad_button_up_event(&mut self, ctx: &mut Context, btn: Button, id: GamepadId) {
+    fn gamepad_button_up_event(&mut self, _ctx: &mut Context, btn: Button, id: GamepadId) {
         let player_id = self.identify_or_add_player(id);
         self.players[usize::from(player_id)].reset_button_pressed_duration(btn);
     }
