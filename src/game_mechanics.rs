@@ -14,6 +14,8 @@ pub struct GameState {
     pub player_node_ids: Vec<NId>,
     /// which edge is currently selected by each player
     pub player_edge_ids: Vec<Option<EId>>,
+    /// new edges, which are added by the players, are stored here before being added
+    pub player_new_edge_n_ids: Vec<Option<NId>>,
     pub nodes: Vec<GameNode>,
     pub edges: Vec<GameEdge>,
     troop_distribution_timer: Timer,
@@ -24,10 +26,18 @@ impl GameState {
         GameState {
             player_node_ids: Vec::new(),
             player_edge_ids: Vec::new(),
+            player_new_edge_n_ids: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
             troop_distribution_timer: Timer::new(),
         }
+    }
+    pub fn add_player(&mut self, start_n_id: NId, physics_state: &PhysicsState) {
+        self.player_node_ids.push(start_n_id);
+        self.player_edge_ids.push(None);
+        self.player_new_edge_n_ids.push(None);
+        // give him some starting units
+        self.add_units(physics_state, start_n_id, (self.player_node_ids.len()-1) as PlayerId, 20);
     }
     pub fn player_node(&self, p_id: PlayerId) -> &GameNode {
         &self.nodes[usize::from(self.player_node_ids[usize::from(p_id)])]
@@ -666,7 +676,7 @@ impl GameEdge {
 }
 
 /// holds the unit-count and the player owning these units
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Troop {
     pub count: UnitCount,
     pub player: PlayerId
@@ -703,7 +713,7 @@ impl Troop {
         amount_added
     }
     /// Returns how many were actually removed
-    fn remove_units(&mut self, amount: UnitCount) -> UnitCount {
+    pub fn remove_units(&mut self, amount: UnitCount) -> UnitCount {
         let mut amount_removed: UnitCount = 0;
         (self.count, amount_removed) = match self.count.checked_sub(amount) {
             Some(new_count) => (new_count, amount),
@@ -752,6 +762,14 @@ impl GameNode {
     /// Returns true if the player controls this node or if he has troops here
     pub fn player_can_access(&self, p_id: PlayerId) -> bool {
         self.controlled_by == p_id || self.troops.iter().find(|x| x.player == p_id).is_some()
+    }
+
+    pub fn troop_of_player(&self, player_id: PlayerId) -> Option<&Troop> {
+        Troop::troop_of_player(&self.troops, player_id)
+    }
+
+    pub fn troop_of_player_mut(&mut self, player_id: PlayerId) -> Option<&mut Troop> {
+        Troop::troop_of_player_mut(&mut self.troops, player_id)
     }
 
     fn start_fight(&mut self) {

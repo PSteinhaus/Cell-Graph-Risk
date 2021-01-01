@@ -20,6 +20,7 @@ use ggez::event::{Button, Axis};
 use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16};
 use ggez::input::gamepad::gilrs::ev::Code;
 use std::convert::TryFrom;
+use ggez::input::gamepad::gilrs::ev::Button::South;
 
 mod physics;
 mod game_mechanics;
@@ -162,10 +163,7 @@ impl MainState {
         let mut rng = thread_rng();
         // for now choose a random node for the player to start on
         let start_n_id = rng.gen_range(0, self.node_count() as NId);
-        self.game_state.player_node_ids.push(start_n_id);
-        self.game_state.player_edge_ids.push(None);
-        // give him some starting units
-        self.game_state.add_units(&self.physics_state, start_n_id, (self.players.len()-1) as PlayerId, 20);
+        self.game_state.add_player(start_n_id, &self.physics_state);
     }
 
     fn identify_or_add_player(&mut self, gamepad_id: GamepadId) -> PlayerId {
@@ -198,7 +196,11 @@ impl MainState {
     }
 
     fn player_node(&self, id: PlayerId) -> &Node {
-        self.physics_state.node_at(self.game_state.player_node_ids[usize::from(id)])
+        Self::player_node_static(&self.physics_state, &self.game_state, id)
+    }
+
+    fn player_node_static<'a>(physics_state: &'a PhysicsState, game_state: &GameState, id: PlayerId) -> &'a Node {
+        physics_state.node_at(game_state.player_node_ids[usize::from(id)])
     }
 
     fn player_node_mut(&mut self, id: PlayerId) -> &mut Node {
@@ -215,7 +217,11 @@ impl MainState {
     }
 
     fn draw_param_edge(&self, edge: &Edge, g_edge: &GameEdge) -> DrawParam {
-        let (node1, node2) = (self.physics_state.node_at(edge.node_indices[0]), self.physics_state.node_at(edge.node_indices[1]));
+        self.draw_param_edge_from_n_ids(edge.node_indices, g_edge.controlled_by())
+    }
+
+    fn draw_param_edge_from_n_ids(&self, n_ids: [NId; 2], p_id_controlling: PlayerId) -> DrawParam {
+        let (node1, node2) = (self.physics_state.node_at(n_ids[0]), self.physics_state.node_at(n_ids[1]));
         let vec: Vector2<f32> = node2.position - node1.position;
         let rotation = na::RealField::atan2(vec.y, vec.x);
 
@@ -224,7 +230,7 @@ impl MainState {
             .dest(Point2::new(node1.position.x, node1.position.y))
             .rotation(rotation)
             .scale(Vector2::new(vec.norm() / self.edge_sprite_width, 1.0))
-            .color(self.player_color(g_edge.controlled_by()))
+            .color(self.player_color(p_id_controlling))
     }
 
     fn draw_edge(players: &[PlayerState], spr_width: f32, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge) {
@@ -285,7 +291,8 @@ impl MainState {
             if player.pressed_for_at_least(Button::RightTrigger, DISTRIBUTION_TRIGGER_DURATION) {
                 self.game_state.player_node_mut(player_id as PlayerId).clear_troop_paths();
             }
-            // handle stick input
+
+            // HANDLE STICK INPUT
             use Axis::*;
             const DEADZONE: f32 = 0.75;
             // left stick
@@ -296,7 +303,45 @@ impl MainState {
                 player.remove_left_axis_cooldown();
                 stick_active = false;
             }
-            if stick_active && player.try_left_axis_cooldown(dt) {
+            if gamepad.is_pressed(South) {
+                // new edge selection starts
+                let mut chosen_node = NO_NODE;
+                if stick_active {
+                    let angle = y.atan2(x);
+                    let player_n_id = usize::from(self.game_state.player_node_ids[player_id]);
+                    // find the target node for the new edge
+                    let mut smallest_diff: f32 = 1.5;  // the worst fit still needs to be better than this
+                    // go through all nodes and find those in range
+                    const NEW_EDGE_RANGE: f32 = 800.0;
+                    for (n_id, node) in self.physics_state.node_iter().enumerate() {
+                        if n_id == player_n_id { continue; }
+                        let vec = node.position - Self::player_node_static(&self.physics_state, &self.game_state, player_id as PlayerId).position;
+                        // first check if it's in range
+                        if vec.norm() <= NEW_EDGE_RANGE {
+                            // then check if this edge already exists
+                            if self.physics_state.neighbors(player_n_id as NId).find(|id| *id == n_id as NId).is_none() {
+                                // calc the angle
+                                let e_angle = vec.y.atan2(vec.x);
+                                let diff = angle_diff_abs(e_angle, angle);
+                                // check if it fits better than anything found until now
+                                if diff < smallest_diff {
+                                    smallest_diff = diff;
+                                    chosen_node = n_id as NId;
+                                }
+                            }
+                        }
+                    }
+                }
+                self.game_state.player_new_edge_n_ids[player_id] = if chosen_node == NO_NODE {
+                    // reset the new edge selection (in other words set the new edge target back to None)
+                    None
+                } else {
+                    // save the selection, so it can be added when 'A' is released
+                    println!("chose node {}", chosen_node);
+                    Some(chosen_node)
+                }
+            }
+            else if stick_active && player.try_left_axis_cooldown(dt) {
                 let angle = y.atan2(x);
                 // get the node where the player is currently at
                 let p_node_id = self.game_state.player_node_ids[player_id];
@@ -430,8 +475,8 @@ impl event::EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         let dt = timer::delta(ctx);
         if timer::ticks(ctx) % 100 == 0 {
-            println!("Delta frame time: {:?} ", dt);
-            println!("Average FPS: {}", timer::fps(ctx));
+            //println!("Delta frame time: {:?} ", dt);
+            //println!("Average FPS: {}", timer::fps(ctx));
         }
         // handle user input
         self.handle_input(ctx);
@@ -468,8 +513,15 @@ impl event::EventHandler for MainState {
         }
 
         // Draw the edges chosen by the players
+        let mut add_last: Option<DrawParam> = None;
         for (i, _player) in self.players.iter().enumerate() {
-            if let Some(edge_id) = self.game_state.player_edge_ids[i] {
+            // if the player is currently adding a new edge draw it (lightly) instead of the actually selected edge
+            if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[i] {
+                let mut p = self.draw_param_edge_from_n_ids([self.game_state.player_node_ids[i], target_n_id], i as PlayerId);
+                p.color.a = 0.5;    // draw it lightly
+                add_last = Some(p);
+            }
+            else if let Some(edge_id) = self.game_state.player_edge_ids[i] {
                 let mut p = self.draw_param_edge(self.physics_state.edge_at(edge_id), &self.game_state.edges[usize::from(edge_id)])
                     .color(WHITE);
                 p.scale.y *= 2.0;
@@ -484,6 +536,10 @@ impl event::EventHandler for MainState {
                 Self::draw_edge(&self.players, self.edge_sprite_width, &self.physics_state,
                                 &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge);
             }
+        }
+        // draw the possible new edge over the others to make it a bit more visible
+        if let Some(p) = add_last {
+            self.spr_b_edge.add(p);
         }
 
         // Draw the edges
@@ -567,6 +623,38 @@ impl event::EventHandler for MainState {
     fn gamepad_button_up_event(&mut self, _ctx: &mut Context, btn: Button, id: GamepadId) {
         let player_id = self.identify_or_add_player(id);
         self.players[usize::from(player_id)].reset_button_pressed_duration(btn);
+        match btn {
+            South => {
+                // 'A' was released
+                // check if there's a new edge to add
+                let mut added = false;
+                if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[usize::from(player_id)] {
+                    //println!("target found: {}", target_n_id);
+                    // check if the player controls the node completely
+                    const NEW_EDGE_UNIT_COST: UnitCount = 2;
+                    let game_node = self.game_state.player_node_mut(player_id);
+                    if game_node.controlled_by() == player_id {
+                        //println!("control matches");
+                        if let Some(troop) = game_node.troop_of_player_mut(player_id) {
+                            //println!("troop found: {:?}", troop);
+                            // check if the node can pay the unit cost
+                            if troop.count >= NEW_EDGE_UNIT_COST {
+                                //println!("edge cost ok, adding edge");
+                                // pay the price and add the new edge
+                                troop.remove_units(NEW_EDGE_UNIT_COST);
+                                self.add_edge(self.game_state.player_node_ids[usize::from(player_id)], target_n_id);
+                                added = true;
+                            }
+                        }
+                    }
+                }
+                if added {
+                    // reset the target edge
+                    self.game_state.player_new_edge_n_ids[usize::from(player_id)] = None;
+                }
+            }
+            _ => {}
+        }
     }
     fn resize_event(&mut self, ctx: &mut Context, width: f32, height: f32) {
         println!("Resized screen to {}, {}", width, height);
