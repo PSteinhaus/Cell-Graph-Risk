@@ -245,7 +245,7 @@ impl GameState {
                                     let e_id = possible_e_ids[usize::from(node.troop_distribution_counter) % e_count];
                                     // advance the counter
                                     node.troop_distribution_counter = node.troop_distribution_counter.wrapping_add(1);
-                                    // add the troop (TODO: at some point I'll limit the amount of units that can travel an edge, then I'll have to react to not being able to add a troop here)
+                                    // add the troop
                                     self.edges[usize::from(e_id)].add_troop(
                                         physics_state.edge_at(e_id).pos_in_edge(n_id),
                                         node.controlled_by(),
