@@ -19,6 +19,7 @@ pub struct GameState {
     pub nodes: Vec<GameNode>,
     pub edges: Vec<GameEdge>,
     troop_distribution_timer: Timer,
+    troop_distribution_counter: u8,
 }
 
 impl GameState {
@@ -30,6 +31,7 @@ impl GameState {
             nodes: Vec::new(),
             edges: Vec::new(),
             troop_distribution_timer: Timer::new(),
+            troop_distribution_counter: 0,
         }
     }
     pub fn add_player(&mut self, start_n_id: NId, physics_state: &PhysicsState) {
@@ -89,7 +91,7 @@ impl GameState {
     }
 
     fn check_for_troop_distribution(&mut self, dt: f32) -> bool {
-        const DURATION_BETWEEN_DISTRIBUTIONS: f32 = 1.0;
+        const DURATION_BETWEEN_DISTRIBUTIONS: f32 = 0.75;
         self.troop_distribution_timer.check(dt, DURATION_BETWEEN_DISTRIBUTIONS)
     }
 
@@ -111,6 +113,7 @@ impl GameState {
     pub fn update(&mut self, physics_state: &PhysicsState, dt: f32) {
         // update all nodes
         let distribute_troops = self.check_for_troop_distribution(dt);
+        if distribute_troops { self.troop_distribution_counter = self.troop_distribution_counter.wrapping_add(1); }
         // collect the nodes that switch their control along the way
         let mut control_changed_nodes = SmallVec::<[NId; 32]>::new();
         use CellType::*;
@@ -132,20 +135,16 @@ impl GameState {
             }
             // let cells distribute troops to their chosen edges
             // uncontrolled cells and disputed cells cannot distribute troops
-            if distribute_troops && node.controlled_by != NO_PLAYER {
+            if distribute_troops && node.controlled_by != NO_PLAYER && node.troop_send_paths.len() != 0 {
                 if let Some(available_units) = Troop::troop_of_player(&node.troops,node.controlled_by).unwrap().count.checked_sub(node.desired_unit_count) {
-                    let mut units_to_distribute = clamp(node.troop_send_paths.len() as UnitCount,
-                                                  0,
-                                                  available_units);
-                    Troop::remove_units_of_player(&mut node.troops, node.controlled_by, units_to_distribute);
-                    for e_id in node.troop_send_paths.iter() {
-                        if units_to_distribute == 0 {
-                            break;
-                        }
+                    let mut units_to_distribute = clamp(1,0,available_units);
+                    if units_to_distribute != 0 {
+                        Troop::remove_units_of_player(&mut node.troops, node.controlled_by, units_to_distribute);
+                        let e_id = node.troop_send_paths.iter().nth(usize::from(self.troop_distribution_counter) % node.troop_send_paths.len()).unwrap();
                         self.edges[usize::from(*e_id)].add_troop(
                             physics_state.edge_at(*e_id).pos_in_edge(n_id as NId),
                             node.controlled_by(),
-                            1
+                            units_to_distribute
                         )
                     }
                 }
