@@ -1,13 +1,13 @@
-use crate::{NId, EId, PlayerId, NO_PLAYER, UnitCount, MAX_UNIT_COUNT};
+use crate::{NId, EId, PlayerId, NO_PLAYER, UnitCount, MAX_UNIT_COUNT, ANYONE_PLAYER, CANCER_PLAYER, NO_EDGE};
 use std::collections::BTreeSet;
 use ggez::nalgebra::clamp;
-use smallvec::{SmallVec};
+use smallvec::{SmallVec, smallvec};
 use crate::physics::PhysicsState;
 use crate::helpers::*;
 use core::slice::IterMut;
 use std::slice::Iter;
 use rand::{thread_rng, Rng};
-use rand::seq::SliceRandom;
+use rand::seq::{SliceRandom, IteratorRandom};
 
 pub struct GameState {
     /// on which node each player currently is
@@ -19,7 +19,8 @@ pub struct GameState {
     pub nodes: Vec<GameNode>,
     pub edges: Vec<GameEdge>,
     troop_distribution_timer: Timer,
-    troop_distribution_counter: u8,
+    unit_production_timer_producer: Timer,
+    unit_production_timer_cancer: Timer,
 }
 
 impl GameState {
@@ -31,7 +32,8 @@ impl GameState {
             nodes: Vec::new(),
             edges: Vec::new(),
             troop_distribution_timer: Timer::new(),
-            troop_distribution_counter: 0,
+            unit_production_timer_producer: Timer::new(),
+            unit_production_timer_cancer: Timer::new(),
         }
     }
     pub fn add_player(&mut self, start_n_id: NId, physics_state: &PhysicsState) {
@@ -47,8 +49,8 @@ impl GameState {
     pub fn player_node_mut(&mut self, p_id: PlayerId) -> &mut GameNode {
         &mut self.nodes[usize::from(self.player_node_ids[usize::from(p_id)])]
     }
-    pub fn add_node(&mut self) {
-        self.nodes.push(GameNode::new());
+    pub fn add_node(&mut self, cell_type: CellType) {
+        self.nodes.push(GameNode::with_type(cell_type));
     }
     pub fn add_edge(&mut self) { self.edges.push(GameEdge::new()); }
     pub fn remove_node(&mut self, node_index: NId) {
@@ -95,25 +97,85 @@ impl GameState {
         self.troop_distribution_timer.check(dt, DURATION_BETWEEN_DISTRIBUTIONS)
     }
 
-    pub fn add_units(&mut self, physics_state: &PhysicsState, n_id: NId, p_id: PlayerId, unit_count: UnitCount) -> UnitCount {
-        let (units_added, control_changed) = self.nodes[usize::from(n_id)].add_units(p_id, unit_count);
-        if control_changed { self.update_edges_control(n_id, physics_state); }
-        units_added
+    fn check_for_unit_production_producer(&mut self, dt: f32) -> bool {
+        const DURATION_BETWEEN_UNITS_PRODUCED: f32 = 0.75;
+        self.unit_production_timer_producer.check(dt, DURATION_BETWEEN_UNITS_PRODUCED)
     }
 
-    fn update_edges_control(&mut self, n_id: NId, physics_state: &PhysicsState) {
+    fn check_for_unit_production_cancer(&mut self, dt: f32) -> bool {
+        const DURATION_BETWEEN_UNITS_PRODUCED: f32 = 2.25;
+        self.unit_production_timer_cancer.check(dt, DURATION_BETWEEN_UNITS_PRODUCED)
+    }
+
+    pub fn add_units(&mut self, physics_state: &PhysicsState, n_id: NId, p_id: PlayerId, unit_count: UnitCount) -> UnitCount {
+        let (units_added, control_changed) = self.nodes[usize::from(n_id)].add_units(p_id, unit_count);
+        if control_changed { self.update_node_and_edges_control(n_id, physics_state); }
+        units_added
+    }
+    /// Returns true if the player is to be removed from the game
+    pub fn kick_player_from_node(&mut self, p_id: PlayerId, n_id: NId, physics_state: &PhysicsState) -> bool {
+        Self::kick_player_from_node_static(&mut self.player_node_ids[usize::from(p_id)], p_id, n_id, physics_state, &self.nodes)
+    }
+
+    pub fn kick_player_from_node_static(p_n_id: &mut NId, p_id: PlayerId, n_id: NId, physics_state: &PhysicsState, nodes: &[GameNode]) -> bool {
+        if *p_n_id == n_id {
+            let mut searching_node = true;
+            // first try to send him to a neighbor
+            for neighbor in physics_state.neighbors(*p_n_id) {
+                if nodes[usize::from(neighbor)].player_can_access(p_id as PlayerId) {
+                    *p_n_id = neighbor;
+                    searching_node = false;
+                    break;
+                }
+            }
+            // if this fails just send him to some node that he can access
+            if searching_node {
+                for (new_n_id, game_node) in nodes.iter().enumerate() {
+                    let new_n_id = new_n_id as NId;
+                    if new_n_id != n_id && game_node.player_can_access(p_id as PlayerId) {
+                        *p_n_id = new_n_id;
+                        searching_node = false;
+                        break;
+                    }
+                }
+            }
+            // if this fails as well then the player has lost (and is removed from the game for now)
+            if searching_node {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn update_node_and_edges_control(&mut self, n_id: NId, physics_state: &PhysicsState) -> SmallVec<[PlayerId; 4]> {
+        let g_node = &self.nodes[usize::from(n_id)];
         for e_id in physics_state.node_at(n_id).edge_indices.iter() {
             // get the other node of this edge
             let other_n_id = physics_state.edge_at(*e_id).other_node(n_id);
-            let game_nodes = [&self.nodes[usize::from(n_id)], &self.nodes[usize::from(other_n_id)]];
+            let game_nodes = [g_node, &self.nodes[usize::from(other_n_id)]];
             self.edges[usize::from(*e_id)].update_controlled_by(game_nodes);
         }
+        // also kick all players that might be on this node if they have no units here anymore
+        let mut players_to_be_removed = SmallVec::<[PlayerId; 4]>::new();
+        let controller = g_node.controlled_by();
+        if controller != NO_PLAYER {
+            for (p_id, p_n_id) in self.player_node_ids.iter_mut().enumerate() {
+                let p_id = p_id as PlayerId;
+                if n_id == *p_n_id && controller != p_id {
+                    if Self::kick_player_from_node_static(p_n_id, p_id, n_id, physics_state, &self.nodes) {
+                        players_to_be_removed.push(p_id);
+                    }
+                }
+            }
+        }
+        return players_to_be_removed;
     }
-
-    pub fn update(&mut self, physics_state: &PhysicsState, dt: f32) {
+    /// Returns players who have to be removed.
+    pub fn update(&mut self, physics_state: &PhysicsState, dt: f32) -> SmallVec<[PlayerId; 4]> {
         // update all nodes
-        let distribute_troops = self.check_for_troop_distribution(dt);
-        if distribute_troops { self.troop_distribution_counter = self.troop_distribution_counter.wrapping_add(1); }
+        let distribute_troops   = self.check_for_troop_distribution(dt);
+        let production_producer = self.check_for_unit_production_producer(dt);
+        let production_cancer   = self.check_for_unit_production_cancer(dt);
         // collect the nodes that switch their control along the way
         let mut control_changed_nodes = SmallVec::<[NId; 32]>::new();
         use CellType::*;
@@ -128,24 +190,67 @@ impl GameState {
             }
 
             match node.cell_type() {
-                Basic => {
-
-                }
+                Producer => {
+                    if production_producer { node.add_units(ANYONE_PLAYER, 1); }
+                },
+                Cancer => {
+                    if production_cancer { node.add_units(CANCER_PLAYER, 1); }
+                },
                 _ => {}
             }
-            // let cells distribute troops to their chosen edges
-            // uncontrolled cells and disputed cells cannot distribute troops
-            if distribute_troops && node.controlled_by != NO_PLAYER && node.troop_send_paths.len() != 0 {
-                if let Some(available_units) = Troop::troop_of_player(&node.troops,node.controlled_by).unwrap().count.checked_sub(node.desired_unit_count) {
-                    let mut units_to_distribute = clamp(1,0,available_units);
-                    if units_to_distribute != 0 {
-                        Troop::remove_units_of_player(&mut node.troops, node.controlled_by, units_to_distribute);
-                        let e_id = node.troop_send_paths.iter().nth(usize::from(self.troop_distribution_counter) % node.troop_send_paths.len()).unwrap();
-                        self.edges[usize::from(*e_id)].add_troop(
-                            physics_state.edge_at(*e_id).pos_in_edge(n_id as NId),
-                            node.controlled_by(),
-                            units_to_distribute
-                        )
+        }
+        // manage unit distribution
+        // let cells distribute troops to their chosen edges
+        if distribute_troops {
+            //for (n_id, node) in self.nodes.iter_mut().enumerate() {
+            for n_id in 0..self.nodes.len() {
+                let n_id = n_id as NId;
+                let nodes_unchecked = &self.nodes as *const Vec<GameNode>;  // necessary to circumvent the borrow checker; its use is completely safe and doing it differently would have been a large fuss for nothing
+                let node = &mut self.nodes[usize::from(n_id)];
+                // uncontrolled cells and disputed cells cannot distribute troops
+                let can_distribute = match node.cell_type {
+                    Producer | Cancer => node.controlled_by != NO_PLAYER,
+                    _ => node.controlled_by != NO_PLAYER && (node.troop_send_paths.len() != 0),
+                };
+                if can_distribute {
+                    if let Some(troop) = Troop::troop_of_player_mut(&mut node.troops, node.controlled_by) {
+                        if let Some(available_units) = troop.count.checked_sub(node.desired_unit_count) {
+                            let mut units_to_distribute = clamp(1, 0, available_units);
+                            if units_to_distribute != 0 {
+                                troop.remove_units(units_to_distribute);
+                                let mut possible_e_ids: SmallVec<[EId; 16]> = match node.cell_type {
+                                    Cancer => { physics_state.node_at(n_id).edge_indices.iter().copied().collect() },
+                                    Producer => unsafe {
+                                        physics_state.neighbors(n_id)
+                                            .filter(|neighbor_id| match (*nodes_unchecked)[usize::from(*neighbor_id)].controlled_by() {
+                                                NO_PLAYER | ANYONE_PLAYER => false,
+                                                _ => true
+                                            })
+                                            .map(|neighbor_id| physics_state.edge_id_between(n_id, neighbor_id).unwrap())
+                                            .collect()
+                                    },
+                                    _ => node.troop_send_paths.iter().copied().collect()
+                                };
+                                // filter out all edges that point towards a producer, as producers may not be targeted
+                                unsafe {
+                                    possible_e_ids.retain(|e_id| (*nodes_unchecked)[usize::from(physics_state.edge_at(*e_id).other_node(n_id))]
+                                        .controlled_by() != ANYONE_PLAYER);
+                                }
+                                let e_count = possible_e_ids.len();
+                                if e_count != 0 {
+                                    // choose an edge
+                                    let e_id = possible_e_ids[usize::from(node.troop_distribution_counter) % e_count];
+                                    // advance the counter
+                                    node.troop_distribution_counter = node.troop_distribution_counter.wrapping_add(1);
+                                    // add the troop (TODO: at some point I'll limit the amount of units that can travel an edge, then I'll have to react to not being able to add a troop here)
+                                    self.edges[usize::from(e_id)].add_troop(
+                                        physics_state.edge_at(e_id).pos_in_edge(n_id),
+                                        node.controlled_by(),
+                                        units_to_distribute
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -156,9 +261,13 @@ impl GameState {
             edge.advance_fights(dt, physics_state.edge_length_id(e_id as EId));
         }
         // recalculate the edge control values for all edges of the control changed nodes
+        // also kick players from nodes that they're not allowed to be on anymore
+        // in this process players can be kicked completely out of the game, so collect those players to hand them back to the main state
+        let mut players_to_be_removed = SmallVec::<[PlayerId; 4]>::new();
         for n_id in control_changed_nodes.iter() {
-            self.update_edges_control(*n_id, physics_state);
+            players_to_be_removed.append(&mut self.update_node_and_edges_control(*n_id, physics_state));
         }
+        return players_to_be_removed;
     }
 }
 
@@ -203,18 +312,10 @@ impl<'a> Fight {
             println!("BATTLING");
             while i < last_defender_index {
                 // calculate the attack (for now let it be 1)
-                let my_attack = 1;
-                let other_attack = 1;
-                // flip a coin to see if you win the encounter
-                if thread_rng().gen_bool(0.5) {
-                    // you win, damage the other
-                    troops[i+1].count = troops[i+1].count.saturating_sub(my_attack);
-                    println!("count: {}", troops[i+1].count);
-                } else {
-                    // the other one wins, let him damage you
-                    troops[i].count = troops[i].count.saturating_sub(other_attack);
-                    println!("count: {}", troops[i].count);
-                }
+                let my_attack = (troops[i].count as f32).powf(0.25f32) as UnitCount;
+                // you attack, damage the other
+                troops[i+1].count = troops[i+1].count.saturating_sub(my_attack);
+                println!("count: {}", troops[i+1].count);
                 // the next one has already fought, so skip him
                 i += 2;
             }
@@ -542,7 +643,7 @@ impl GameEdge {
         while checking {
             // first check whether troops have entered known fights
             // for direction 0
-            let mut checked_players = SmallVec::<[PlayerId; 8]>::new();
+            let mut checked_players: SmallVec::<[PlayerId; 8]> = smallvec![ANYONE_PLAYER]; // ANYONE_PLAYER doesn't need to be checked because its units don't interfere
             for advancing_troop in self.advancing_troops[0].iter_mut() {  // first elements are the oldest/most advanced
                 let my_player = advancing_troop.troop.player;
                 if checked_players.contains(&my_player) { continue; }
@@ -562,7 +663,7 @@ impl GameEdge {
             // remove possible empty troops
             self.advancing_troops[0].retain(|t| t.troop.count != 0);
             // for direction 1
-            let mut checked_players = SmallVec::<[PlayerId; 8]>::new();
+            let mut checked_players: SmallVec::<[PlayerId; 8]> = smallvec![ANYONE_PLAYER];
             for advancing_troop in self.advancing_troops[1].iter_mut() {  // first elements are the oldest/most advanced
                 let my_player = advancing_troop.troop.player;
                 if checked_players.contains(&my_player) { continue; }
@@ -586,12 +687,12 @@ impl GameEdge {
             // therefore check for one direction for each troop whether a troop of another player moving in the opposite direction has passed it
             // if so, stop it and start a fight
             let mut fighting_troops: Option<(usize, usize)> = None; // (adv_troop_id1 on advancing_troops[0], adv_troop_id2 on advancing_troops[1])
-            let mut checked_players = SmallVec::<[PlayerId; 8]>::new();
+            let mut checked_players: SmallVec::<[PlayerId; 8]> = smallvec![ANYONE_PLAYER];
             for (my_i, advancing_troop) in self.advancing_troops[0].iter().enumerate() {  // first elements are the oldest/most advanced
                 let my_player = advancing_troop.troop.player;
                 if checked_players.contains(&my_player) { continue; }
                 for (other_i, other_troop) in self.advancing_troops[1].iter().enumerate() {
-                    if my_player != other_troop.troop.player {
+                    if my_player != other_troop.troop.player && other_troop.troop.player != ANYONE_PLAYER { // don't start fights with the ANYONE_PLAYER (i.e. the producer player)
                         if advancing_troop.advancement >= other_troop.advancement {
                             // this enemy troop has passed you, start a fight!
                             fighting_troops = Some((my_i, other_i));
@@ -670,6 +771,7 @@ impl GameEdge {
                 control_changed_nodes.push(dest_n_id);
             }
         }
+
         self.check_for_fights(advance);
     }
 }
@@ -683,10 +785,20 @@ pub struct Troop {
 
 impl Troop {
     fn troop_of_player(troops: &[Troop], p_id: PlayerId) -> Option<&Troop> {
-        troops.iter().find(|troop| troop.player == p_id)
+        if p_id == ANYONE_PLAYER {
+            // choose a random troop
+            troops.iter().choose(&mut thread_rng())
+        } else {
+            troops.iter().find(|troop| troop.player == p_id)
+        }
     }
     fn troop_of_player_mut(troops: &mut [Troop], p_id: PlayerId) -> Option<&mut Troop> {
-        troops.iter_mut().find(|troop| troop.player == p_id)
+        if p_id == ANYONE_PLAYER {
+            // choose a random troop
+            troops.iter_mut().choose(&mut thread_rng())
+        } else {
+            troops.iter_mut().find(|troop| troop.player == p_id)
+        }
     }
     fn remove_units_of_player(troops: &mut Vec<Troop>, p_id: PlayerId, amount: UnitCount) -> UnitCount {
         let mut amount_removed: UnitCount = 0;
@@ -697,17 +809,25 @@ impl Troop {
         troops.retain(|t| t.count != 0);
         amount_removed
     }
+    fn max_unit_count(&self) -> UnitCount {
+        match self.player {
+            ANYONE_PLAYER => 2,
+            CANCER_PLAYER => 11,
+            _ => 99,
+        }
+    }
     /// Returns how many were actually added
     fn add_units(&mut self, amount: UnitCount) -> UnitCount {
         let mut amount_added = 0;
+        let max = self.max_unit_count();
         if let Some(new_count) = self.count.checked_add(amount) {
-            (self.count, amount_added) = if new_count <= UnitCount::MAX {
+            (self.count, amount_added) = if new_count <= max {
                 (new_count, amount)
             } else {
-                (UnitCount::MAX, UnitCount::MAX - self.count)
+                (max, max - self.count)
             };
         } else {
-            (self.count, amount_added) = (UnitCount::MAX, UnitCount::MAX - self.count);
+            (self.count, amount_added) = (max, max - self.count);
         }
         amount_added
     }
@@ -722,6 +842,7 @@ impl Troop {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum CellType {
     Basic,
     Propulsion,
@@ -742,7 +863,8 @@ pub struct GameNode {
     controlled_by: PlayerId,
     /// how this Node acts as a cell (i.e. as a wall, as a producer, as cancer, ...)
     cell_type: CellType,
-    fight: Option<Fight>
+    fight: Option<Fight>,
+    troop_distribution_counter: u8,
 }
 
 impl GameNode {
@@ -756,8 +878,22 @@ impl GameNode {
             controlled_by: NO_PLAYER,
             cell_type: CellType::Basic,
             fight: None,
+            troop_distribution_counter: 0,
         }
     }
+
+    fn with_type(cell_type: CellType) -> GameNode {
+        let mut g_node = GameNode::new();
+        g_node.cell_type = cell_type;
+        use CellType::*;
+        match cell_type {
+            Producer => { g_node.controlled_by = ANYONE_PLAYER; },
+            Cancer   => { g_node.controlled_by = CANCER_PLAYER; },
+            _ => {}
+        }
+        g_node
+    }
+
     /// Returns true if the player controls this node or if he has troops here
     pub fn player_can_access(&self, p_id: PlayerId) -> bool {
         self.controlled_by == p_id || self.troops.iter().find(|x| x.player == p_id).is_some()

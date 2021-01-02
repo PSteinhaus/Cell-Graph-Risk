@@ -61,10 +61,14 @@ impl MainState {
     }
 
     fn add_node(&mut self, position: Point2<f32>) {
+        self.add_node_of_type(position, CellType::Basic);
+    }
+
+    fn add_node_of_type(&mut self, position: Point2<f32>, cell_type: CellType) {
         // add to physics
         self.physics_state.add_node(position);
         // add to game state
-        self.game_state.add_node();
+        self.game_state.add_node(cell_type);
     }
 
     fn remove_node(&mut self, node_index: NId) {
@@ -72,31 +76,9 @@ impl MainState {
         // only send him to nodes that he can actually be on (i.e. his own or those in battle state carrying his troops)
         // collect players that have to be removed (in case there are any) and remove them afterwards
         let mut players_to_remove: Vec<PlayerId> = Vec::new();
-        for (p_id, player_node) in self.game_state.player_node_ids.iter_mut().enumerate() {
-            if *player_node == node_index {
-                let mut searching_node = true;
-                // first try to send him to a neighbor
-                for neighbor in self.physics_state.neighbors(*player_node) {
-                    if self.game_state.nodes[usize::from(neighbor)].player_can_access(p_id as PlayerId) {
-                        *player_node = neighbor;
-                        searching_node = false;
-                        break;
-                    }
-                }
-                // if this fails just send him to some node that he can access
-                if searching_node {
-                    for (n_id, game_node) in self.game_state.nodes.iter().enumerate() {
-                        if game_node.player_can_access(p_id as PlayerId) {
-                            *player_node = n_id as NId;
-                            searching_node = false;
-                            break;
-                        }
-                    }
-                }
-                // if this fails as well then the player has lost (and is removed from the game for now)
-                if searching_node {
-                    players_to_remove.push(p_id as PlayerId)
-                }
+        for p_id in 0..self.game_state.player_node_ids.len() {
+            if self.game_state.kick_player_from_node(p_id as PlayerId, node_index, &self.physics_state) {
+                players_to_remove.push(p_id as PlayerId);
             }
         }
         for p_id in players_to_remove {
@@ -488,7 +470,10 @@ impl event::EventHandler for MainState {
             let ratio = (DESIRED_DELTA / secs) * thread_rng().gen_range(0.997, 1.003);
             let dur = ratio * secs;
             // update the game state
-            self.game_state.update(&self.physics_state, dur);
+            let players_to_be_removed = self.game_state.update(&self.physics_state, dur);
+            for player in players_to_be_removed.into_iter() {
+                self.remove_player(player);
+            }
             // update the physics simulation
             self.physics_state.simulate_step(dur);
         }
@@ -695,6 +680,9 @@ pub fn main() -> GameResult {
 
     for _ in 0..10 {
         state.add_node(Point2::new(rng.gen_range(100.0, 3740.0), rng.gen_range(100.0, 2060.0)));
+    }
+    for _ in 0..2 {
+        state.add_node_of_type(Point2::new(rng.gen_range(100.0, 3740.0), rng.gen_range(100.0, 2060.0)), CellType::Producer);
     }
     //state.add_node(Point2::new(0.0, 0.0));
     /*

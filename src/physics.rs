@@ -60,11 +60,21 @@ impl PhysicsState {
             }
         }
     }
+    pub fn edge_id_between(&self, n_id1: NId, n_id2: NId) -> Option<EId> {
+        let mut e_id: Option<EId> = None;
+        for edge_index in self.node_at(n_id1).edge_indices.iter() {
+            if self.edge_at(*edge_index).other_node(n_id1) == n_id2 {
+                e_id = Some(*edge_index);
+                break;
+            }
+        }
+        e_id
+    }
     pub fn are_neighbors(&self, node1_index: NId, node2_index: NId) -> bool {
         // check the edges of the first node for the second node
         let mut are_neighbors = false;
         for edge_index in self.node_at(node1_index).edge_indices.iter() {
-            if self.edge_at(*edge_index).node_indices.contains(&node2_index) {
+            if self.edge_at(*edge_index).other_node(node1_index) == node2_index {
                 are_neighbors = true;
                 break;
             }
