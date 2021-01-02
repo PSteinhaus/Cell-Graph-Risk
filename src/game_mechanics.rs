@@ -206,6 +206,7 @@ impl GameState {
             for n_id in 0..self.nodes.len() {
                 let n_id = n_id as NId;
                 let nodes_unchecked = &self.nodes as *const Vec<GameNode>;  // necessary to circumvent the borrow checker; its use is completely safe and doing it differently would have been a large fuss for nothing
+                let edges_unchecked = &self.edges as *const Vec<GameEdge>;
                 let node = &mut self.nodes[usize::from(n_id)];
                 // uncontrolled cells and disputed cells cannot distribute troops
                 let can_distribute = match node.cell_type {
@@ -232,9 +233,11 @@ impl GameState {
                                     _ => node.troop_send_paths.iter().copied().collect()
                                 };
                                 // filter out all edges that point towards a producer, as producers may not be targeted
+                                // also filter out all edges that have already reached their maximum unit count
                                 unsafe {
                                     possible_e_ids.retain(|e_id| (*nodes_unchecked)[usize::from(physics_state.edge_at(*e_id).other_node(n_id))]
-                                        .controlled_by() != ANYONE_PLAYER);
+                                        .controlled_by() != ANYONE_PLAYER
+                                        && (*edges_unchecked)[usize::from(*e_id)].addable_unit_count() >= units_to_distribute );
                                 }
                                 let e_count = possible_e_ids.len();
                                 if e_count != 0 {
@@ -247,7 +250,7 @@ impl GameState {
                                         physics_state.edge_at(e_id).pos_in_edge(n_id),
                                         node.controlled_by(),
                                         units_to_distribute
-                                    )
+                                    );
                                 }
                             }
                         }
@@ -269,23 +272,6 @@ impl GameState {
         }
         return players_to_be_removed;
     }
-}
-
-/// holds the units currently traveling the edge and other game related edge data
-pub struct GameEdge {
-    /// holds tuples containing the relative advancement of the unit and the player id;
-    /// [0] contains units traveling from node1 to node2 (as defined by the corresponding physical edge)
-    /// [1] contains units traveling form node2 to node1
-    /// the advancement is measured as the relative advancement from node1 to node2
-    advancing_troops: [Vec<AdvancingTroop>; 2],
-    /// If both ends of this edge are owned by one player and no foreign units are on it, then it is controlled by him.
-    ///
-    /// This value is cached here because fast access to it allows for optimized control-dependent operations including drawing the edge.
-    /// i.e. it is needed often and changes rarely
-    controlled_by: PlayerId,
-    /// If there is a fight on this edge it is found in one of these two Options, measured in relative advancement from node1 to node2
-    /// There can only ever at most be 2 fights at once (if fights occur whenever troops are controlled by different players, that is)
-    pub fights: SmallVec<[EdgeFight; 2]>,
 }
 
 struct Fight {
@@ -530,6 +516,23 @@ impl AdvancingTroop {
     }
 }
 
+/// holds the units currently traveling the edge and other game related edge data
+pub struct GameEdge {
+    /// holds tuples containing the relative advancement of the unit and the player id;
+    /// [0] contains units traveling from node1 to node2 (as defined by the corresponding physical edge)
+    /// [1] contains units traveling form node2 to node1
+    /// the advancement is measured as the relative advancement from node1 to node2
+    advancing_troops: [Vec<AdvancingTroop>; 2],
+    /// If both ends of this edge are owned by one player and no foreign units are on it, then it is controlled by him.
+    ///
+    /// This value is cached here because fast access to it allows for optimized control-dependent operations including drawing the edge.
+    /// i.e. it is needed often and changes rarely
+    controlled_by: PlayerId,
+    /// If there is a fight on this edge it is found in one of these two Options, measured in relative advancement from node1 to node2
+    /// There can only ever at most be 2 fights at once (if fights occur whenever troops are controlled by different players, that is)
+    pub fights: SmallVec<[EdgeFight; 2]>,
+}
+
 impl GameEdge {
     fn new() -> GameEdge { GameEdge {
         advancing_troops: [Vec::new(), Vec::new()],
@@ -538,11 +541,37 @@ impl GameEdge {
     } }
     pub fn controlled_by(&self) -> PlayerId { self.controlled_by }
 
-    fn add_troop(&mut self, start_index: usize, p_id: PlayerId, amount: UnitCount) {
-        if amount == 0 { return; }
-        self.advancing_troops[start_index].push(AdvancingTroop::new(Troop { count: amount, player: p_id }, start_index))
+    pub fn unit_count(&self) -> UnitCount {
+        let mut count: UnitCount = 0;
+        for adv_troop in self.troop_iter() {
+            count += adv_troop.troop.count;
+        }
+        for fight in self.fights.iter() {
+            for t in fight.troop_iter() {
+                count += t.count;
+            }
+        }
+        count
     }
-
+    fn max_unit_count(&self) -> UnitCount {
+        if self.controlled_by == CANCER_PLAYER {
+            20
+        } else {
+            200
+        }
+    }
+    fn addable_unit_count(&self) -> UnitCount { self.max_unit_count().saturating_sub(self.unit_count()) }
+    fn can_take_on_more_units(&self) -> bool { self.unit_count() < self.max_unit_count() }
+    /// Returns whether the troop was added successfully.
+    fn add_troop(&mut self, start_index: usize, p_id: PlayerId, amount: UnitCount) -> bool {
+        if amount == 0 { return true; }
+        if self.unit_count() < self.max_unit_count() {
+            self.advancing_troops[start_index].push(AdvancingTroop::new(Troop { count: amount, player: p_id }, start_index));
+            return true;
+        }
+        false
+    }
+    /// WARNING: This function does not check for a maximum unit count. Handle with care.
     fn add_troop_advanced(&mut self, start_index: usize, troop: Troop, advancement: f32) {
         // add them so that the vector remains sorted
         let mut not_inserted = true;
