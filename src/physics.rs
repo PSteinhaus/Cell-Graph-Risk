@@ -274,6 +274,13 @@ impl Edge {
             self.relaxed_length = MIN_LENGTH;
         }
     }
+    pub fn lengthen(&mut self, amount: f32) {
+        const MAX_LENGTH: f32 = 800.0;
+        self.relaxed_length += amount;
+        if self.relaxed_length > MAX_LENGTH {
+            self.relaxed_length = MAX_LENGTH;
+        }
+    }
     pub fn pos_in_edge(&self, n_id: NId) -> usize {
         self.node_indices.iter().position(|x| *x == n_id).unwrap()
     }

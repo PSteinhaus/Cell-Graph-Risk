@@ -21,6 +21,7 @@ use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16};
 use ggez::input::gamepad::gilrs::ev::Code;
 use std::convert::TryFrom;
 use ggez::input::gamepad::gilrs::ev::Button::South;
+use smallvec::{SmallVec, smallvec};
 
 mod physics;
 mod game_mechanics;
@@ -71,18 +72,18 @@ impl MainState {
         self.game_state.add_node(cell_type);
     }
 
-    fn remove_node(&mut self, node_index: NId) {
+    fn remove_node(&mut self, node_index: NId) -> SmallVec<[PlayerId; 4]> {
         // if a player is on this node place him somewhere else
         // only send him to nodes that he can actually be on (i.e. his own or those in battle state carrying his troops)
         // collect players that have to be removed (in case there are any) and remove them afterwards
-        let mut players_to_remove: Vec<PlayerId> = Vec::new();
+        let mut players_to_remove: SmallVec<[PlayerId; 4]> = smallvec![];
         for p_id in 0..self.game_state.player_node_ids.len() {
             if self.game_state.kick_player_from_node(p_id as PlayerId, node_index, &self.physics_state) {
                 players_to_remove.push(p_id as PlayerId);
             }
         }
-        for p_id in players_to_remove {
-            self.remove_player(p_id);
+        for p_id in players_to_remove.iter() {
+            self.remove_player(*p_id);
         }
         // first remove all edges to this node
         while !self.physics_state.node_at(node_index).edge_indices.is_empty() {
@@ -93,6 +94,8 @@ impl MainState {
         self.game_state.remove_node(node_index);
         // remove it from physics
         self.physics_state.remove_node(node_index);
+        // return which players got removed (if any)
+        players_to_remove
     }
 
     fn node_count(&self) -> usize { self.physics_state.node_count() }
@@ -137,6 +140,10 @@ impl MainState {
 
     fn player_using(&self, gamepad_id: GamepadId) -> &PlayerState {
         &self.players[usize::from(self.player_id_using(gamepad_id))]
+    }
+    fn player_using_mut(&mut self, gamepad_id: GamepadId) -> &mut PlayerState {
+        let id = self.player_id_using(gamepad_id);
+        &mut self.players[usize::from(id)]
     }
 
     fn add_player(&mut self, gamepad_id: GamepadId, color: Color) {
@@ -399,12 +406,22 @@ impl MainState {
 
             // handle button input
             if gamepad.is_pressed(Button::West) {
-                // "X": reduce selected edge length (but not here, this is something to check continually)
+                // "X": reduce selected edge length
                 const SHORTENING_SPEED: f32 = 500.0;
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     // if an edge is selected and owned by the player shorten it
                     if self.game_state.edges[usize::from(e_id)].controlled_by() == (player_id as PlayerId) {
                         self.physics_state.edge_at_mut(e_id).shorten(timer::delta(ctx).as_secs_f32() * SHORTENING_SPEED);
+                    }
+                }
+            }
+            if gamepad.is_pressed(Button::North) {
+                // "Y": increase selected edge length
+                const LENGTHENING_SPEED: f32 = 500.0;
+                if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
+                    // if an edge is selected and owned by the player shorten it
+                    if self.game_state.edges[usize::from(e_id)].controlled_by() == (player_id as PlayerId) {
+                        self.physics_state.edge_at_mut(e_id).lengthen(timer::delta(ctx).as_secs_f32() * LENGTHENING_SPEED);
                     }
                 }
             }
@@ -416,7 +433,7 @@ struct PlayerState {
     color: Color,
     gamepad_id: GamepadId,
     left_axis_cooldown: f32,
-    gamepad_pressed_timers: [f32; 20] // because there are 20 buttons
+    gamepad_pressed_timers: [f32; 20], // because there are 20 buttons
 }
 
 impl PlayerState {
@@ -442,6 +459,9 @@ impl PlayerState {
     fn remove_left_axis_cooldown(&mut self) {
         self.left_axis_cooldown = 0.0;
     }
+    fn pressed_for(&self, button: Button) -> f32 {
+        self.gamepad_pressed_timers[usize::from(btn_to_u16(button))]
+    }
     fn pressed_for_at_least(&self, button: Button, duration: f32) -> bool {
         self.gamepad_pressed_timers[usize::from(btn_to_u16(button))] >= duration
     }
@@ -451,6 +471,23 @@ impl PlayerState {
     fn reset_button_pressed_duration(&mut self, button: Button) {
         self.gamepad_pressed_timers[usize::from(btn_to_u16(button))] = 0.0;
     }
+    fn current_removal_type(&self) -> NodeEdgeOrNothing {
+        const NODE_REMOVAL_DURATION: f32 = 1.25;
+        const NO_REMOVAL_DURATION: f32 = 2.5;
+        use NodeEdgeOrNothing::*;
+        match self.pressed_for(Button::East) {
+            d if d >= NO_REMOVAL_DURATION => Nothing,
+            d if d >= NODE_REMOVAL_DURATION => Node,
+            d if d != 0.0 => Edge,
+            _ => Nothing,
+        }
+    }
+}
+
+enum NodeEdgeOrNothing {
+    Node,
+    Edge,
+    Nothing,
 }
 
 impl event::EventHandler for MainState {
@@ -486,10 +523,10 @@ impl event::EventHandler for MainState {
         graphics::clear(ctx, graphics::Color::from((80u8, 80u8, 80u8)));
 
         // Draw the player positions
-        for (i, _player) in self.players.iter().enumerate() {
+        for (i, player) in self.players.iter().enumerate() {
             let p = self.draw_param_node(self.game_state.player_node_ids[i])
                 .scale(Vector2::new(1.25, 1.25))
-                .color(WHITE);
+                .color(if let NodeEdgeOrNothing::Node = player.current_removal_type() { BLACK } else { WHITE } );
             self.spr_b_node.add(p);
         }
         // Fill the nodes spritebatch
@@ -498,17 +535,17 @@ impl event::EventHandler for MainState {
         }
 
         // Draw the edges chosen by the players
-        let mut add_last: Option<DrawParam> = None;
-        for (i, _player) in self.players.iter().enumerate() {
+        let mut add_last: SmallVec<[DrawParam; 8]> = smallvec![];
+        for (i, player) in self.players.iter().enumerate() {
             // if the player is currently adding a new edge draw it (lightly) instead of the actually selected edge
             if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[i] {
                 let mut p = self.draw_param_edge_from_n_ids([self.game_state.player_node_ids[i], target_n_id], i as PlayerId);
                 p.color.a = 0.5;    // draw it lightly
-                add_last = Some(p);
+                add_last.push(p);
             }
             else if let Some(edge_id) = self.game_state.player_edge_ids[i] {
                 let mut p = self.draw_param_edge(self.physics_state.edge_at(edge_id), &self.game_state.edges[usize::from(edge_id)])
-                    .color(WHITE);
+                    .color(if let NodeEdgeOrNothing::Edge = player.current_removal_type() { BLACK } else { WHITE } );
                 p.scale.y *= 2.0;
                 self.spr_b_edge.add(p);
             }
@@ -523,7 +560,7 @@ impl event::EventHandler for MainState {
             }
         }
         // draw the possible new edge over the others to make it a bit more visible
-        if let Some(p) = add_last {
+        for p in add_last.into_iter() {
             self.spr_b_edge.add(p);
         }
 
@@ -544,22 +581,10 @@ impl event::EventHandler for MainState {
         use Button::*;
         // plan for control layout:
         match btn {
-            // "B": cut selected edge
-            East => {
-                if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
-                    // if an edge is selected and owned by the player cut it
-                    //if self.game_state.edges[usize::from(e_id)].controlled_by == player_id {
-                    self.remove_edge(e_id);
-                    //}
-                }
-            },
-            // "Y": destroy selected node
-            North => {
-                let player_node_id = self.game_state.player_node_ids[usize::from(player_id)];
-                //if self.game_state.nodes[usize::from(player_node_id)].controlled_by == player_id {
-                    self.remove_node(player_node_id);
-                //}
-            },
+            // "B": cut selected edge (but not here, this is something to check when "B" is released)
+            East => {},
+            // "Y": increase selected edge length (but not here, this is something to check continually)
+            North => {},
             // "X": reduce selected edge length (but not here, this is something to check continually)
             West => {},
             // "A": start adding a new node/edge or burn units for propulsion (propulsion cell only) (but not here, this is something to check continually)
@@ -607,8 +632,32 @@ impl event::EventHandler for MainState {
 
     fn gamepad_button_up_event(&mut self, _ctx: &mut Context, btn: Button, id: GamepadId) {
         let player_id = self.identify_or_add_player(id);
-        self.players[usize::from(player_id)].reset_button_pressed_duration(btn);
+        let player = &self.players[usize::from(player_id)];
+        let mut player_removed = false;
+        use Button::*;
         match btn {
+            // "B": cut selected edge or remove selected node
+            East => {
+                // whether it's the edge or the node (or nothing if held for long enough) depends on how long the button was pressed
+                use NodeEdgeOrNothing::*;
+                match player.current_removal_type() {
+                    Nothing => {},
+                    Node => {
+                        let player_node_id = self.game_state.player_node_ids[usize::from(player_id)];
+                        if self.game_state.nodes[usize::from(player_node_id)].controlled_by() == player_id {
+                            player_removed = self.remove_node(player_node_id).contains(&player_id);
+                        }
+                    },
+                    Edge => {
+                        if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
+                            // if an edge is selected and owned by the player cut it
+                            if self.game_state.edges[usize::from(e_id)].controlled_by() == player_id {
+                                self.remove_edge(e_id);
+                            }
+                        }
+                    }
+                }
+            },
             South => {
                 // 'A' was released
                 // check if there's a new edge to add
@@ -639,6 +688,11 @@ impl event::EventHandler for MainState {
                 }
             }
             _ => {}
+        }
+        // the player identity needs to be checked here again, because due to the removal of a node
+        // the player ids can change (and thereby get invalidated)
+        if !player_removed {
+            self.players[usize::from(player_id)].reset_button_pressed_duration(btn);
         }
     }
     fn resize_event(&mut self, ctx: &mut Context, width: f32, height: f32) {
