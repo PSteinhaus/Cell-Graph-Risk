@@ -710,7 +710,7 @@ impl GameEdge {
         while checking {
             // first check whether troops have entered known fights
             // for direction 0
-            let mut checked_players: SmallVec::<[PlayerId; 8]> = smallvec![ANYONE_PLAYER]; // ANYONE_PLAYER doesn't need to be checked because its units don't interfere
+            let mut checked_players: SmallVec<[PlayerId; 8]> = smallvec![ANYONE_PLAYER]; // ANYONE_PLAYER doesn't need to be checked because its units don't interfere
             for advancing_troop in self.advancing_troops[0].iter_mut() {  // first elements are the oldest/most advanced
                 let my_player = advancing_troop.troop.player;
                 if checked_players.contains(&my_player) { continue; }
@@ -730,7 +730,7 @@ impl GameEdge {
             // remove possible empty troops
             self.advancing_troops[0].retain(|t| t.troop.count != 0);
             // for direction 1
-            let mut checked_players: SmallVec::<[PlayerId; 8]> = smallvec![ANYONE_PLAYER];
+            let mut checked_players: SmallVec<[PlayerId; 8]> = smallvec![ANYONE_PLAYER];
             for advancing_troop in self.advancing_troops[1].iter_mut() {  // first elements are the oldest/most advanced
                 let my_player = advancing_troop.troop.player;
                 if checked_players.contains(&my_player) { continue; }
@@ -754,7 +754,7 @@ impl GameEdge {
             // therefore check for one direction for each troop whether a troop of another player moving in the opposite direction has passed it
             // if so, stop it and start a fight
             let mut fighting_troops: Option<(usize, usize)> = None; // (adv_troop_id1 on advancing_troops[0], adv_troop_id2 on advancing_troops[1])
-            let mut checked_players: SmallVec::<[PlayerId; 8]> = smallvec![ANYONE_PLAYER];
+            let mut checked_players: SmallVec<[PlayerId; 8]> = smallvec![ANYONE_PLAYER];
             for (my_i, advancing_troop) in self.advancing_troops[0].iter().enumerate() {  // first elements are the oldest/most advanced
                 let my_player = advancing_troop.troop.player;
                 if checked_players.contains(&my_player) { continue; }
