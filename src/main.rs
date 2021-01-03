@@ -111,7 +111,7 @@ impl MainState {
             // add to physics
             self.physics_state.add_edge(node1_index, node2_index);
             // add to game state
-            self.game_state.add_edge();
+            self.game_state.add_edge(&[node1_index, node2_index]);
             return true;
         }
         return false;
@@ -266,7 +266,7 @@ impl MainState {
             if player.pressed_for_at_least(Button::LeftTrigger, DISTRIBUTION_TRIGGER_DURATION) {
                 let p_node_id = self.game_state.player_node_ids[usize::from(player_id)];
                 for e_id in self.physics_state.node_at(p_node_id).edge_indices.iter() {
-                    self.game_state.player_node_mut(player_id as PlayerId).add_troop_path(*e_id);
+                    self.game_state.add_troop_path_checked(p_node_id,*e_id, &self.physics_state);
                 }
             }
             // if RB is pressed for some time remove all edges from the list of edges to distribute to
@@ -567,7 +567,7 @@ impl event::EventHandler for MainState {
             LeftTrigger => {
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     let n_id = self.game_state.player_node_ids[usize::from(player_id)];
-                    self.game_state.nodes[usize::from(n_id)].add_troop_path(e_id);
+                    self.game_state.add_troop_path_checked(n_id, e_id, &self.physics_state);
                 }
             }
             // "RB": remove selected edge from list of troop destinations (stop sending troops)

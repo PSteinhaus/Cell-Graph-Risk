@@ -49,10 +49,37 @@ impl GameState {
     pub fn player_node_mut(&mut self, p_id: PlayerId) -> &mut GameNode {
         &mut self.nodes[usize::from(self.player_node_ids[usize::from(p_id)])]
     }
+    /// Add the troop path only if it doesn't lead to a producer
+    pub fn add_troop_path_checked(&mut self, n_id: NId, path: EId, physics_state: &PhysicsState) {
+        let target_n_id = physics_state.edge_at(path).other_node(n_id);
+        let target_node_c_type = self.nodes[usize::from(target_n_id)].cell_type;
+        let node = &mut self.nodes[usize::from(n_id)];
+        Self::add_troop_path_static(path, node, target_node_c_type);
+    }
+    pub fn add_troop_path_static(path: EId, node: &mut GameNode, target_node_c_type: CellType) {
+        if let CellType::Producer = target_node_c_type {
+            // the target is a producer, don't add the path
+        } else {
+            node.add_troop_path(path);
+        }
+    }
     pub fn add_node(&mut self, cell_type: CellType) {
         self.nodes.push(GameNode::with_type(cell_type));
     }
-    pub fn add_edge(&mut self) { self.edges.push(GameEdge::new()); }
+    pub fn add_edge(&mut self, n_ids: &[NId; 2]) {
+        self.edges.push(GameEdge::new());
+        // check if this edge contains a cancer cell or a producer
+        let cell_types: SmallVec<[CellType; 2]> = n_ids.iter().map(|n_id| self.nodes[usize::from(*n_id)].cell_type).collect();
+        for i in 0..2 {
+            use CellType::*;
+            if let Producer | Cancer = cell_types[i] {
+                // if so, try to add this new edge to its list of troop distribution targets
+                let node = &mut self.nodes[usize::from(n_ids[i])];
+                let e_id = (self.edges.len() - 1) as EId;
+                Self::add_troop_path_static(e_id, node, cell_types[1 - i]);
+            }
+        }
+    }
     pub fn remove_node(&mut self, node_index: NId) {
         // remove the game node from the collection
         self.nodes.swap_remove(usize::from(node_index));
@@ -72,7 +99,7 @@ impl GameState {
             self.nodes[usize::from(*n_id)].remove_troop_path(&edge_index);
         }
         self.edges.swap_remove(usize::from(edge_index));
-        // do housekeeping
+        // do housekeeping (i.e. inform all nodes that the edge found at the last index is now found at edge_index)
         let swapped_id = self.edges.len() as EId;
         if swapped_id != edge_index {
             for node in self.nodes.iter_mut() {
@@ -219,7 +246,7 @@ impl GameState {
                             let mut units_to_distribute = clamp(1, 0, available_units);
                             if units_to_distribute != 0 {
                                 troop.remove_units(units_to_distribute);
-                                let mut possible_e_ids: SmallVec<[EId; 16]> = match node.cell_type {
+                                let mut possible_e_ids: SmallVec<[EId; 16]> = /* match node.cell_type {
                                     Cancer => { physics_state.node_at(n_id).edge_indices.iter().copied().collect() },
                                     Producer => unsafe {
                                         physics_state.neighbors(n_id)
@@ -230,14 +257,25 @@ impl GameState {
                                             .map(|neighbor_id| physics_state.edge_id_between(n_id, neighbor_id).unwrap())
                                             .collect()
                                     },
-                                    _ => node.troop_send_paths.iter().copied().collect()
-                                };
+                                    _ => */ node.troop_send_paths.iter().copied().collect();
+                                //};
                                 // filter out all edges that point towards a producer, as producers may not be targeted
                                 // also filter out all edges that have already reached their maximum unit count
                                 unsafe {
-                                    possible_e_ids.retain(|e_id| (*nodes_unchecked)[usize::from(physics_state.edge_at(*e_id).other_node(n_id))]
-                                        .controlled_by() != ANYONE_PLAYER
-                                        && (*edges_unchecked)[usize::from(*e_id)].addable_unit_count() >= units_to_distribute );
+                                    match node.cell_type {
+                                        Producer => {
+                                            possible_e_ids.retain(|e_id| { let ctrl = (*nodes_unchecked)[usize::from(physics_state.edge_at(*e_id).other_node(n_id))]
+                                                .controlled_by();
+                                                return ctrl != ANYONE_PLAYER && ctrl != NO_PLAYER   // for producers also filter out edges that lead to uncontrolled nodes
+                                                && (*edges_unchecked)[usize::from(*e_id)].addable_unit_count() >= units_to_distribute;
+                                            })
+                                        }
+                                        _ => {
+                                            possible_e_ids.retain(|e_id| (*nodes_unchecked)[usize::from(physics_state.edge_at(*e_id).other_node(n_id))]
+                                                .controlled_by() != ANYONE_PLAYER
+                                                && (*edges_unchecked)[usize::from(*e_id)].addable_unit_count() >= units_to_distribute );
+                                        }
+                                    }
                                 }
                                 let e_count = possible_e_ids.len();
                                 if e_count != 0 {
@@ -1003,11 +1041,10 @@ impl GameNode {
     pub fn desired_unit_count(&self) -> UnitCount {
         self.desired_unit_count
     }
-    pub fn add_troop_path(&mut self, path: EId) {
+    fn add_troop_path(&mut self, path: EId) {
         self.troop_send_paths.insert(path);
     }
     pub fn remove_troop_path(&mut self, path: &EId) {
-        println!("removed e_id: {}", *path);
         self.troop_send_paths.remove(path);
     }
     pub fn clear_troop_paths(&mut self) {
