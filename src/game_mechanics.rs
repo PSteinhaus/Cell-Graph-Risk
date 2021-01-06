@@ -216,12 +216,23 @@ impl GameState {
                 }
             }
 
+            // then check for mutations and advance them
+            let mut end_mutation = false;
+            if let Some((c_type, duration_left)) = &mut node.mutating {
+                *duration_left -= dt;
+                if *duration_left <= 0. {
+                    node.cell_type = *c_type;
+                    node.mutating = None;
+                }
+            }
+
             match node.cell_type() {
                 Producer => {
                     if production_producer { node.add_units(ANYONE_PLAYER, 1); }
                 },
                 Cancer => {
                     if production_cancer { node.add_units(CANCER_PLAYER, 1); }
+                    // TODO: let cancer try to connect to other nodes in range
                 },
                 _ => {}
             }
@@ -932,6 +943,19 @@ pub struct GameNode {
     cell_type: CellType,
     fight: Option<Fight>,
     troop_distribution_counter: u8,
+    mutating: Option<(CellType, f32)>
+}
+
+fn mutation_cost(cell_type: &CellType) -> UnitCount {
+    match cell_type {
+        _ => 5
+    }
+}
+
+fn mutation_duration(cell_type: &CellType) -> f32 {
+    match cell_type {
+        _ => 6.0
+    }
 }
 
 impl GameNode {
@@ -946,6 +970,7 @@ impl GameNode {
             cell_type: CellType::Basic,
             fight: None,
             troop_distribution_counter: 0,
+            mutating: None,
         }
     }
 
@@ -959,6 +984,26 @@ impl GameNode {
             _ => {}
         }
         g_node
+    }
+    /// Returns whether this node can currently mutate into a given type.
+    pub fn can_mutate(&self, cell_type: &CellType) -> bool {
+        return self.controlled_by != NO_PLAYER  // there needs to be clear control to decide who pays
+            && self.mutating.is_none()  // there may not be any other mutation currently running
+            && std::mem::discriminant(&self.cell_type) == std::mem::discriminant(cell_type) // one may not mutate a cell into the same type it currently has
+            && self.troop_of_player(self.controlled_by).unwrap().count >= mutation_cost(cell_type) + 1  // and the cost must be payable
+    }
+
+    fn start_mutation(&mut self, cell_type: CellType) {
+        self.mutating = Some((cell_type, mutation_duration(&cell_type)));
+        self.troop_of_player_mut(self.controlled_by).unwrap().remove_units(mutation_cost(&cell_type));
+    }
+
+    pub fn try_start_mutation(&mut self, cell_type: CellType) -> bool {
+        if self.can_mutate(&cell_type) {
+            self.start_mutation(cell_type);
+            return true;
+        }
+        false
     }
 
     /// Returns true if the player controls this node or if he has troops here

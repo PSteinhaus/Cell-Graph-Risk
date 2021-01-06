@@ -13,15 +13,14 @@ use std::path;
 use crate::physics::{PhysicsState, Node, Edge};
 use crate::game_mechanics::*;
 use rand::{Rng, thread_rng};
-use ggez::graphics::{Rect, DrawMode, Image, DrawParam, Drawable, Color, WHITE, BLACK};
+use ggez::graphics::{Rect, DrawMode, Image, DrawParam, Drawable, Color, WHITE, BLACK, Text, TextFragment, FilterMode, Scale};
 use ggez::graphics::spritebatch::SpriteBatch;
 use ggez::input::gamepad::{GamepadId, gamepad, Gamepad};
 use ggez::event::{Button, Axis};
 use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16};
-use ggez::input::gamepad::gilrs::ev::Code;
-use std::convert::TryFrom;
 use ggez::input::gamepad::gilrs::ev::Button::South;
 use smallvec::{SmallVec, smallvec};
+use std::mem::transmute;
 
 mod physics;
 mod game_mechanics;
@@ -46,6 +45,7 @@ struct MainState {
     edge_sprite_width: f32,
     spr_b_node: SpriteBatch,
     spr_b_edge: SpriteBatch,
+    unit_count_texts: Vec<Text>,
 }
 
 impl MainState {
@@ -58,6 +58,7 @@ impl MainState {
             edge_sprite_width: img.width() as f32,
             spr_b_node: SpriteBatch::new(Image::new(ctx, "/node.png").unwrap()),
             spr_b_edge: SpriteBatch::new(img),
+            unit_count_texts: Vec::new(),
         }
     }
 
@@ -70,6 +71,14 @@ impl MainState {
         self.physics_state.add_node(position);
         // add to game state
         self.game_state.add_node(cell_type);
+        // reserve a text for unit count
+        let txt_fragm = TextFragment::new("42").scale(Scale::uniform(200.0));
+        let txt = Text::new(txt_fragm);
+        self.unit_count_texts.push(txt);
+    }
+
+    fn set_unit_count_text(texts: &mut [Text], n_id: usize, str: String) {
+        texts[n_id].fragments_mut()[0].text = str;
     }
 
     fn remove_node(&mut self, node_index: NId) -> SmallVec<[PlayerId; 4]> {
@@ -429,11 +438,20 @@ impl MainState {
     }
 }
 
+#[repr(u16)]
+#[derive(Copy, Clone)]
+enum UnitCountDrawMode {
+    NoDrawing = 0,
+    Units = 1,
+    DesiredCount = 2,
+}
+
 struct PlayerState {
     color: Color,
     gamepad_id: GamepadId,
     left_axis_cooldown: f32,
     gamepad_pressed_timers: [f32; 20], // because there are 20 buttons
+    unit_count_draw_mode: UnitCountDrawMode
 }
 
 impl PlayerState {
@@ -442,7 +460,8 @@ impl PlayerState {
             color,
             gamepad_id,
             left_axis_cooldown: 0.0,
-            gamepad_pressed_timers: [0.0; 20]
+            gamepad_pressed_timers: [0.0; 20],
+            unit_count_draw_mode: UnitCountDrawMode::Units,
         }
     }
     /// Advances the cooldown timer dt seconds and returns true if the cooldown is done.
@@ -494,8 +513,8 @@ impl event::EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         let dt = timer::delta(ctx);
         if timer::ticks(ctx) % 100 == 0 {
-            //println!("Delta frame time: {:?} ", dt);
-            //println!("Average FPS: {}", timer::fps(ctx));
+            println!("Delta frame time: {:?} ", dt);
+            println!("Average FPS: {}", timer::fps(ctx));
         }
         // handle user input
         self.handle_input(ctx);
@@ -530,8 +549,27 @@ impl event::EventHandler for MainState {
             self.spr_b_node.add(p);
         }
         // Fill the nodes spritebatch
-        for (i, _node) in self.physics_state.node_iter().enumerate() {
+        for (i, node) in self.physics_state.node_iter().enumerate() {
             self.spr_b_node.add(self.draw_param_node(i as NId));
+            let g_node = &self.game_state.nodes[i];
+            let ctrl = g_node.controlled_by();
+            use UnitCountDrawMode::*;
+            let u_draw_mode = match ctrl {
+                NO_PLAYER | ANYONE_PLAYER => { NoDrawing },
+                CANCER_PLAYER => { Units }
+                p_id => { self.players[usize::from(p_id)].unit_count_draw_mode }
+            };
+            match u_draw_mode {
+                NoDrawing => {},
+                Units => {
+                    Self::set_unit_count_text(&mut self.unit_count_texts, i, g_node.troop_of_player(ctrl).unwrap().count.to_string());
+                    graphics::queue_text(ctx, &self.unit_count_texts[i], node.position, Some(WHITE));
+                },
+                DesiredCount => {
+                    Self::set_unit_count_text(&mut self.unit_count_texts, i, g_node.desired_unit_count().to_string());
+                    graphics::queue_text(ctx, &self.unit_count_texts[i], node.position, Some(BLACK));
+                },
+            }
         }
 
         // Draw the edges chosen by the players
@@ -568,6 +606,8 @@ impl event::EventHandler for MainState {
         graphics::draw(ctx, &self.spr_b_edge, DrawParam::new())?;
         // Draw the nodes
         graphics::draw(ctx, &self.spr_b_node, DrawParam::new())?;
+        // Draw the unit count texts
+        graphics::draw_queued_text(ctx, DrawParam::new(), None, FilterMode::Linear);
 
         self.spr_b_node.clear();
         self.spr_b_edge.clear();
@@ -594,38 +634,60 @@ impl event::EventHandler for MainState {
                     let n_id = self.game_state.player_node_ids[usize::from(player_id)];
                     self.game_state.add_troop_path_checked(n_id, e_id, &self.physics_state);
                 }
-            }
+            },
             // "RB": remove selected edge from list of troop destinations (stop sending troops)
             RightTrigger => {
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     let n_id = self.game_state.player_node_ids[usize::from(player_id)];
                     self.game_state.nodes[usize::from(n_id)].remove_troop_path(&e_id);
                 }
-            }
+            },
             // "LT": increase desired troop count on this node
             LeftTrigger2 => {
-                let game_node = &mut self.game_state.nodes[usize::from(self.game_state.player_node_ids[usize::from(player_id)])];
+                let game_node = self.game_state.player_node_mut(player_id);
                 game_node.set_desired_unit_count(
                     match game_node.desired_unit_count().checked_add(1) {
                         Some(new_count) => new_count,
                         None => MAX_UNIT_COUNT
                     }
                 );
-            }
+            },
             // "RT": decrease desired troop count on this node
             RightTrigger2 => {
-                let game_node = &mut self.game_state.nodes[usize::from(self.game_state.player_node_ids[usize::from(player_id)])];
+                let game_node = self.game_state.player_node_mut(player_id);
                 game_node.set_desired_unit_count(
                     match game_node.desired_unit_count().checked_sub(1) {
                         Some(new_count) => new_count,
                         None => MIN_UNIT_COUNT
                     }
                 );
+            },
+            // "D_PAD_DOWN":    transform cell into cancer cell
+            DPadDown => {
+                let game_node = self.game_state.player_node_mut(player_id);
+                game_node.try_start_mutation(CellType::Cancer);
             }
-            // "D_PAD_UP":    transform cell into cancer cell
-            // "D_PAD_LEFT":  transform cell into wall cell
-            // "D_PAD_RIGHT": transform cell into propulsion cell
-            // "D_PAD_DOWN":  transform cell into basic cell
+            // "D_PAD_RIGHT":  transform cell into wall cell
+            DPadRight => {
+                let game_node = self.game_state.player_node_mut(player_id);
+                game_node.try_start_mutation(CellType::Wall);
+            }
+            // "D_PAD_UP": transform cell into basic cell
+            DPadUp => {
+                let game_node = self.game_state.player_node_mut(player_id);
+                game_node.try_start_mutation(CellType::Basic);
+            }
+            // "D_PAD_LEFT":  transform cell into propulsion cell
+            DPadLeft => {
+                let game_node = self.game_state.player_node_mut(player_id);
+                game_node.try_start_mutation(CellType::Propulsion);
+            }
+            // "Select": change unit count draw mode
+            Select => {
+                let repr = self.players[usize::from(player_id)].unit_count_draw_mode as u16;
+                println!("repr: {}", repr);
+                unsafe { self.players[usize::from(player_id)].unit_count_draw_mode = transmute::<u16, UnitCountDrawMode>((repr + 1) % 3); }
+            },
             _ => {}
         }
     }
@@ -721,7 +783,7 @@ pub fn main() -> GameResult {
         )
         .window_setup(
             conf::WindowSetup::default().samples(
-                conf::NumSamples::from_u32(1)
+                conf::NumSamples::from_u32(2)
                     .expect("Option msaa needs to be 1, 2, 4, 8 or 16!"),
             ),
         );
