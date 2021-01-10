@@ -1105,6 +1105,7 @@ impl GameNode {
                     if p_id != CANCER_PLAYER && p_id != NO_PLAYER {
                         // cancer has just been beaten, turn this cell back into a normal cell
                         self.cell_type = Basic;
+                        self.troop_send_paths.clear();
                     }
                 },
                 _ => { self.troop_send_paths.clear(); }
