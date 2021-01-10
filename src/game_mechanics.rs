@@ -8,6 +8,9 @@ use core::slice::IterMut;
 use std::slice::Iter;
 use rand::{thread_rng, Rng};
 use rand::seq::{SliceRandom, IteratorRandom};
+use ggez::Context;
+use ggez::graphics::Color;
+use crate::game_mechanics::CellType::Basic;
 
 pub struct GameState {
     /// on which node each player currently is
@@ -67,9 +70,16 @@ impl GameState {
         self.nodes.push(GameNode::with_type(cell_type));
     }
     pub fn add_edge(&mut self, n_ids: &[NId; 2]) {
-        self.edges.push(GameEdge::new());
+        let mut edge = GameEdge::new();
+        let g_nodes: SmallVec<[&GameNode; 2]> = n_ids.iter().map(|n_id| &self.nodes[usize::from(*n_id)]).collect();
+        let cell_types: SmallVec<[CellType; 2]> = g_nodes.iter().map(|g_n| g_n.cell_type).collect();
+
+        // give it the correct controller
+        edge.update_controlled_by([g_nodes[0], g_nodes[1]]);
+        std::mem::drop(g_nodes);
+
         // check if this edge contains a cancer cell or a producer
-        let cell_types: SmallVec<[CellType; 2]> = n_ids.iter().map(|n_id| self.nodes[usize::from(*n_id)].cell_type).collect();
+        self.edges.push(edge);
         for i in 0..2 {
             use CellType::*;
             if let Producer | Cancer = cell_types[i] {
@@ -217,12 +227,39 @@ impl GameState {
             }
 
             // then check for mutations and advance them
-            let mut end_mutation = false;
             if let Some((c_type, duration_left)) = &mut node.mutating {
                 *duration_left -= dt;
                 if *duration_left <= 0. {
                     node.cell_type = *c_type;
                     node.mutating = None;
+                    // depending on the type of mutation do some additional things:
+                    match node.cell_type {
+                        Cancer => {
+                            // take over all units on this node and thereby trigger a control change
+                            let mut stolen_units: UnitCount = 0;
+                            for troop in node.troops.iter() {
+                                stolen_units += troop.count;
+                            }
+                            node.troops.clear();
+                            node.add_units(CANCER_PLAYER, stolen_units);
+                            // add all edges to the send paths list
+                            for e_id in physics_state.node_at(n_id as NId).edge_indices.iter() {
+                                node.add_troop_path(*e_id);
+                            }
+                            control_changed_nodes.push(n_id as NId);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // if this cell is owned by the cancer player but not a cancer cell check whether you can turn it into one and do so if you can
+            if node.controlled_by() == CANCER_PLAYER {
+                match node.cell_type {
+                    Cancer => {},
+                    _ => {
+                        node.try_start_mutation(Cancer);
+                    }
                 }
             }
 
@@ -240,17 +277,16 @@ impl GameState {
         // manage unit distribution
         // let cells distribute troops to their chosen edges
         if distribute_troops {
-            //for (n_id, node) in self.nodes.iter_mut().enumerate() {
             for n_id in 0..self.nodes.len() {
                 let n_id = n_id as NId;
                 let nodes_unchecked = &self.nodes as *const Vec<GameNode>;  // necessary to circumvent the borrow checker; its use is completely safe and doing it differently would have been a large fuss for nothing
                 let edges_unchecked = &self.edges as *const Vec<GameEdge>;
                 let node = &mut self.nodes[usize::from(n_id)];
                 // uncontrolled cells and disputed cells cannot distribute troops
-                let can_distribute = match node.cell_type {
-                    Producer | Cancer => node.controlled_by != NO_PLAYER,
-                    _ => node.controlled_by != NO_PLAYER && (node.troop_send_paths.len() != 0),
-                };
+                let can_distribute = node.controlled_by != NO_PLAYER && (node.troop_send_paths.len() != 0);//match node.cell_type {
+                    //Producer | Cancer => node.controlled_by != NO_PLAYER,
+                    //_ => node.controlled_by != NO_PLAYER && (node.troop_send_paths.len() != 0),
+                //};
                 if can_distribute {
                     if let Some(troop) = Troop::troop_of_player_mut(&mut node.troops, node.controlled_by) {
                         if let Some(available_units) = troop.count.checked_sub(node.desired_unit_count) {
@@ -335,7 +371,7 @@ impl<'a> Fight {
     }
 
     fn advance<I: Iterator<Item = &'a mut Troop>>(&mut self, troop_iter_mut: I, dt: f32) -> bool {
-        const DURATION_BETWEEN_BATTLES: f32 = 2.0;
+        const DURATION_BETWEEN_BATTLES: f32 = 0.75;
         if self.battle_timer.check(dt, DURATION_BETWEEN_BATTLES) {
             // let the troops battle each other
             let mut troops: SmallVec<[&mut Troop; 8]> = troop_iter_mut.collect();
@@ -389,7 +425,7 @@ impl EdgeFight {
         }
     }
 
-    fn troop_iter(&self) -> EdgeFightTroopIterator {
+    pub fn troop_iter(&self) -> EdgeFightTroopIterator {
         EdgeFightTroopIterator::new(self.troops.iter())
     }
 
@@ -468,7 +504,7 @@ impl EdgeFight {
     }
 }
 
-struct EdgeFightTroopIterator<'a> {
+pub struct EdgeFightTroopIterator<'a> {
     vec_iter: Iter<'a, SmallVec<[Troop; 2]>>,
     troop_iter: Iter<'a, Troop>
 }
@@ -623,18 +659,19 @@ impl GameEdge {
     /// WARNING: This function does not check for a maximum unit count. Handle with care.
     fn add_troop_advanced(&mut self, start_index: usize, troop: Troop, advancement: f32) {
         // add them so that the vector remains sorted
+        // TODO: it seems that this kind of pseudo-sorting doesn't work so try what happens if we instead actually sort each vec after insertion (but test before you do that, I might just have found and fixed the bug here)
         let mut not_inserted = true;
         if start_index == 0 {
-            for i in (0..self.advancing_troops[start_index].len()).rev() {
-                if self.advancing_troops[start_index][i].advancement > advancement {
+            for i in 0..self.advancing_troops[start_index].len() {
+                if self.advancing_troops[start_index][i].advancement < advancement {
                     self.advancing_troops[start_index].insert(i, AdvancingTroop { troop, advancement });
                     not_inserted = false;
                     break;
                 }
             }
         } else {
-            for i in (0..self.advancing_troops[start_index].len()).rev() {
-                if self.advancing_troops[start_index][i].advancement < advancement {
+            for i in 0..self.advancing_troops[start_index].len() {
+                if self.advancing_troops[start_index][i].advancement > advancement {
                     self.advancing_troops[start_index].insert(i, AdvancingTroop { troop, advancement });
                     not_inserted = false;
                     break;
@@ -709,7 +746,12 @@ impl GameEdge {
     }
 
     fn update_controlled_by(&mut self, game_nodes: [&GameNode; 2]) {
-        if game_nodes[0].controlled_by == game_nodes[1].controlled_by {
+        let (ctrl1, ctrl2) = (game_nodes[0].controlled_by(), game_nodes[1].controlled_by());
+        // if one node is controlled by the "anyone player" (i.e. a producer) then the edge can be controlled by anyone
+        if ctrl1 == ANYONE_PLAYER || ctrl2 == ANYONE_PLAYER {
+            self.controlled_by = ANYONE_PLAYER;
+        }
+        else if ctrl1 == ctrl2 {
             self.controlled_by = game_nodes[0].controlled_by;
         } else {
             self.controlled_by = NO_PLAYER;
@@ -724,7 +766,7 @@ impl GameEdge {
             let mut checked_players: SmallVec<[PlayerId; 8]> = smallvec![ANYONE_PLAYER]; // ANYONE_PLAYER doesn't need to be checked because its units don't interfere
             for advancing_troop in self.advancing_troops[0].iter_mut() {  // first elements are the oldest/most advanced
                 let my_player = advancing_troop.troop.player;
-                if checked_players.contains(&my_player) { continue; }
+                if checked_players.contains(&my_player) { continue; } // TODO: check what happens if we turn this optimization off (check whether it fixes the left over bugs)
                 let mut no_fight_found = true;
                 // go through all known fights
                 for edge_fight in self.fights.iter_mut() {
@@ -854,6 +896,10 @@ impl GameEdge {
     }
 }
 
+pub fn can_control(p_id: PlayerId, other_p_id: PlayerId) -> bool {
+    p_id == other_p_id || other_p_id == ANYONE_PLAYER
+}
+
 /// holds the unit-count and the player owning these units
 #[derive(Copy, Clone, Debug)]
 pub struct Troop {
@@ -898,6 +944,7 @@ impl Troop {
     fn add_units(&mut self, amount: UnitCount) -> UnitCount {
         let mut amount_added = 0;
         let max = self.max_unit_count();
+        //println!("max = {}", max);
         if let Some(new_count) = self.count.checked_add(amount) {
             (self.count, amount_added) = if new_count <= max {
                 (new_count, amount)
@@ -907,6 +954,7 @@ impl Troop {
         } else {
             (self.count, amount_added) = (max, max - self.count);
         }
+        //println!("amount_added = {}", amount_added);
         amount_added
     }
     /// Returns how many were actually removed
@@ -989,7 +1037,7 @@ impl GameNode {
     pub fn can_mutate(&self, cell_type: &CellType) -> bool {
         return self.controlled_by != NO_PLAYER  // there needs to be clear control to decide who pays
             && self.mutating.is_none()  // there may not be any other mutation currently running
-            && std::mem::discriminant(&self.cell_type) == std::mem::discriminant(cell_type) // one may not mutate a cell into the same type it currently has
+            && std::mem::discriminant(&self.cell_type) != std::mem::discriminant(cell_type) // one may not mutate a cell into the same type it currently has
             && self.troop_of_player(self.controlled_by).unwrap().count >= mutation_cost(cell_type) + 1  // and the cost must be payable
     }
 
@@ -1011,6 +1059,10 @@ impl GameNode {
         self.controlled_by == p_id || self.troops.iter().find(|x| x.player == p_id).is_some()
     }
 
+    pub fn troop_iter(&self) -> Iter<Troop> {
+        self.troops.iter()
+    }
+
     pub fn troop_of_player(&self, player_id: PlayerId) -> Option<&Troop> {
         Troop::troop_of_player(&self.troops, player_id)
     }
@@ -1024,12 +1076,14 @@ impl GameNode {
         self.set_controlled_by(NO_PLAYER);
     }
 
-    fn fighting(&self) -> bool { self.fight.is_some() }
+    pub fn fighting(&self) -> bool { self.fight.is_some() }
 
     /// Returns whether the fight has ended (signaling the need for an update of the neighboring edges)
     fn advance_fight(&mut self, dt: f32) -> bool {
         if let Some(active_fight) = &mut self.fight {
             active_fight.advance(self.troops.iter_mut(), dt);
+            // remove possible empty troops
+            self.troops.retain(|t| t.count != 0);
             // check for a winner and end the fight
             if let Some(winning_troop) = Fight::winner(self.troops.iter()) {
                 // hand control over to the new player
@@ -1045,7 +1099,16 @@ impl GameNode {
     fn set_controlled_by(&mut self, p_id: PlayerId) {
         if self.controlled_by != p_id {
             // the controlling player changed, reset the send paths and the desired unit count
-            self.troop_send_paths.clear();
+            // TODO: think about whether I really want this
+            match self.cell_type {
+                CellType::Cancer => {
+                    if p_id != CANCER_PLAYER && p_id != NO_PLAYER {
+                        // cancer has just been beaten, turn this cell back into a normal cell
+                        self.cell_type = Basic;
+                    }
+                },
+                _ => { self.troop_send_paths.clear(); }
+            }
             self.desired_unit_count = Self::INITIAL_DESIRED_UNIT_COUNT;
         }
         self.controlled_by = p_id;
@@ -1057,9 +1120,11 @@ impl GameNode {
         if amount == 0 { return (0, false); }
         let mut control_change = false;
         let troop = if let Some(t) = Troop::troop_of_player_mut(&mut self.troops, p_id) {
+            //println!("troop of player {} found", p_id);
             t
         } else {
             // there is no troop of this player here, create a new one
+            //println!("creating new troop of player {}", p_id);
             let new_troop = Troop { count: 0, player: p_id };
             match self.troops.len() {
                 0 => {
@@ -1078,7 +1143,9 @@ impl GameNode {
             self.troops.last_mut().unwrap()
         };
 
-        (troop.add_units(amount), control_change)
+        let ret = (troop.add_units(amount), control_change);
+        //println!("troop after addition: {:?}", troop);
+        ret
     }
     pub fn set_desired_unit_count(&mut self, unit_count: UnitCount) {
         self.desired_unit_count = clamp(unit_count, 1, MAX_UNIT_COUNT);

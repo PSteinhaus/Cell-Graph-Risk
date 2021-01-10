@@ -2,6 +2,7 @@ use std::f32::consts::PI;
 use std::cmp::min;
 use ggez::input::gamepad::gilrs::Button;
 use std::mem::transmute;
+use ggez::graphics::Color;
 
 pub fn angle_diff_abs(a1: f32, a2: f32) -> f32 {
     let diff1 = (a1 - a2).abs();
@@ -32,6 +33,16 @@ impl Timer {
     pub fn reset(&mut self) {
         self.duration = 0.0;
     }
+}
+
+pub fn lerp_colors(col1: &Color, col2: &Color, col1_factor: f32) -> Color {
+    let col2_factor = 1.0 - col1_factor;
+    Color::new(
+        col1.r * col1_factor + col2.r * col2_factor,
+        col1.g * col1_factor + col2.g * col2_factor,
+        col1.b * col1_factor + col2.b * col2_factor,
+        1.0
+    )
 }
 
 pub fn btn_to_u16(btn: Button) -> u16 {

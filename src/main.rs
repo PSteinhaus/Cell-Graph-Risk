@@ -4,7 +4,7 @@
 use ggez;
 use ggez::{event, conf};
 use ggez::graphics;
-use ggez::nalgebra::{Point2, Vector2};
+use ggez::nalgebra::{Point2, Vector2, clamp, partial_clamp};
 use ggez::nalgebra as na;
 use ggez::timer;
 use ggez::{Context, GameResult};
@@ -17,10 +17,11 @@ use ggez::graphics::{Rect, DrawMode, Image, DrawParam, Drawable, Color, WHITE, B
 use ggez::graphics::spritebatch::SpriteBatch;
 use ggez::input::gamepad::{GamepadId, gamepad, Gamepad};
 use ggez::event::{Button, Axis};
-use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16};
+use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16, lerp_colors};
 use ggez::input::gamepad::gilrs::ev::Button::South;
 use smallvec::{SmallVec, smallvec};
 use std::mem::transmute;
+use std::cmp::{max, min};
 
 mod physics;
 mod game_mechanics;
@@ -56,7 +57,7 @@ impl MainState {
             game_state: GameState::new(),
             physics_state: PhysicsState::new(),
             edge_sprite_width: img.width() as f32,
-            spr_b_node: SpriteBatch::new(Image::new(ctx, "/node.png").unwrap()),
+            spr_b_node: SpriteBatch::new(Image::new(ctx, "/spritesheet.png").unwrap()),
             spr_b_edge: SpriteBatch::new(img),
             unit_count_texts: Vec::new(),
         }
@@ -176,6 +177,30 @@ impl MainState {
         player_id
     }
 
+    fn battle_color<'a, I: Iterator<Item = &'a Troop>>(&self, ctx: &Context, troop_iter: I) -> Color {
+        Self::battle_color_static(&self.players, ctx, troop_iter)
+    }
+
+    fn battle_color_static<'a, I: Iterator<Item = &'a Troop>>(players: &[PlayerState], ctx: &Context, troop_iter: I) -> Color {
+        let troops: SmallVec<[&Troop; 6]> = troop_iter.collect();
+        let len = troops.len();
+        const PHASE_DURATION: f32 = 2.0;
+        let phase_rel = (timer::time_since_start(ctx).as_secs_f32() % PHASE_DURATION) / PHASE_DURATION;
+        let phase_total: f32 = phase_rel * (len) as f32;
+        let phase_floor = phase_total.floor();
+        let i_start = min(phase_floor as usize, len-1);
+        let i_end = if i_start == len-1 {
+            // in the last phase wrap around to the color of the first player
+            0
+        } else {
+            phase_total.ceil() as usize
+        };
+        let color_start = Self::player_color_static(troops[i_start].player, players);
+        let color_end   = Self::player_color_static(troops[i_end].player, players);
+
+        lerp_colors(&color_start, &color_end, phase_total - phase_floor)
+    }
+
     fn player_color(&self, id: PlayerId) -> Color {
         Self::player_color_static(id, &self.players)
     }
@@ -205,13 +230,24 @@ impl MainState {
         self.physics_state.node_at_mut(self.game_state.player_node_ids[usize::from(id)])
     }
 
-    fn draw_param_node(&self, n_id: NId) -> DrawParam {
-        let node = &self.physics_state.node_at(n_id);
-
-        DrawParam::new()
+    fn draw_param_node(&self, n_id: NId, ctx: &Context) -> DrawParam {
+        let node = self.physics_state.node_at(n_id);
+        let g_node = &self.game_state.nodes[usize::from(n_id)];
+        let ctrl = g_node.controlled_by();
+        let mut p = DrawParam::new()
             .offset(Point2::new(0.5, 0.5))
             .dest(Point2::new(node.position.x, node.position.y))
-            .color(self.player_color(self.game_state.nodes[usize::from(n_id)].controlled_by()))
+            .color(if g_node.fighting() { Self::battle_color_static(&self.players, ctx, g_node.troop_iter()) } else { self.player_color(ctrl) });
+
+        use CellType::*;
+        p.src = Rect::new( match g_node.cell_type() {
+            Cancer => 0.0,
+            Propulsion => 0.25,
+            Wall => 0.5,
+            _ => 0.75 //384.0,
+        }, 0.0, 0.25, 1.0);
+
+        p
     }
 
     fn draw_param_edge(&self, edge: &Edge, g_edge: &GameEdge) -> DrawParam {
@@ -231,7 +267,7 @@ impl MainState {
             .color(self.player_color(p_id_controlling))
     }
 
-    fn draw_edge(players: &[PlayerState], spr_width: f32, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge) {
+    fn draw_edge(players: &[PlayerState], ctx: &Context, spr_width: f32, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge) {
         let (node1, node2) = (physics_state.node_at(edge.node_indices[0]),physics_state.node_at(edge.node_indices[1]));
         let vec: Vector2<f32> = node2.position - node1.position;
         let rotation = na::RealField::atan2(vec.y, vec.x);
@@ -248,6 +284,7 @@ impl MainState {
             let pos = node1.position + vec * adv_troop.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
+                .src(Rect::new(0.75,0.0,0.25,1.0))
                 .dest(pos)
                 .scale(Vector2::new(0.5, 0.5))
                 .color(Self::player_color_static(adv_troop.troop.player, players))
@@ -258,9 +295,10 @@ impl MainState {
             let pos = node1.position + vec * fight.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
+                .src(Rect::new(0.75,0.0,0.25,1.0))
                 .dest(pos)
                 .scale(Vector2::new(0.75, 0.75))
-                .color(Self::color_no_player())
+                .color(Self::battle_color_static(players, ctx, fight.troop_iter()))
             );
         }
     }
@@ -419,7 +457,7 @@ impl MainState {
                 const SHORTENING_SPEED: f32 = 500.0;
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     // if an edge is selected and owned by the player shorten it
-                    if self.game_state.edges[usize::from(e_id)].controlled_by() == (player_id as PlayerId) {
+                    if can_control(player_id as PlayerId, self.game_state.edges[usize::from(e_id)].controlled_by()) {
                         self.physics_state.edge_at_mut(e_id).shorten(timer::delta(ctx).as_secs_f32() * SHORTENING_SPEED);
                     }
                 }
@@ -429,7 +467,7 @@ impl MainState {
                 const LENGTHENING_SPEED: f32 = 500.0;
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     // if an edge is selected and owned by the player shorten it
-                    if self.game_state.edges[usize::from(e_id)].controlled_by() == (player_id as PlayerId) {
+                    if can_control(player_id as PlayerId, self.game_state.edges[usize::from(e_id)].controlled_by()) {
                         self.physics_state.edge_at_mut(e_id).lengthen(timer::delta(ctx).as_secs_f32() * LENGTHENING_SPEED);
                     }
                 }
@@ -513,8 +551,8 @@ impl event::EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         let dt = timer::delta(ctx);
         if timer::ticks(ctx) % 100 == 0 {
-            println!("Delta frame time: {:?} ", dt);
-            println!("Average FPS: {}", timer::fps(ctx));
+            //println!("Delta frame time: {:?} ", dt);
+            //println!("Average FPS: {}", timer::fps(ctx));
         }
         // handle user input
         self.handle_input(ctx);
@@ -543,14 +581,14 @@ impl event::EventHandler for MainState {
 
         // Draw the player positions
         for (i, player) in self.players.iter().enumerate() {
-            let p = self.draw_param_node(self.game_state.player_node_ids[i])
+            let p = self.draw_param_node(self.game_state.player_node_ids[i], ctx)
                 .scale(Vector2::new(1.25, 1.25))
                 .color(if let NodeEdgeOrNothing::Node = player.current_removal_type() { BLACK } else { WHITE } );
             self.spr_b_node.add(p);
         }
         // Fill the nodes spritebatch
         for (i, node) in self.physics_state.node_iter().enumerate() {
-            self.spr_b_node.add(self.draw_param_node(i as NId));
+            self.spr_b_node.add(self.draw_param_node(i as NId, ctx));
             let g_node = &self.game_state.nodes[i];
             let ctrl = g_node.controlled_by();
             use UnitCountDrawMode::*;
@@ -593,7 +631,7 @@ impl event::EventHandler for MainState {
             let mut g_edge_iter = self.game_state.edges.iter();
             for edge in self.physics_state.edge_iter() {
                 let g_edge = g_edge_iter.next().unwrap();
-                Self::draw_edge(&self.players, self.edge_sprite_width, &self.physics_state,
+                Self::draw_edge(&self.players, ctx, self.edge_sprite_width, &self.physics_state,
                                 &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge);
             }
         }
@@ -713,7 +751,8 @@ impl event::EventHandler for MainState {
                     Edge => {
                         if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                             // if an edge is selected and owned by the player cut it
-                            if self.game_state.edges[usize::from(e_id)].controlled_by() == player_id {
+                            let e_ctrl = self.game_state.edges[usize::from(e_id)].controlled_by();
+                            if can_control(player_id, e_ctrl) {
                                 self.remove_edge(e_id);
                             }
                         }
@@ -723,31 +762,23 @@ impl event::EventHandler for MainState {
             South => {
                 // 'A' was released
                 // check if there's a new edge to add
-                let mut added = false;
                 if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[usize::from(player_id)] {
-                    //println!("target found: {}", target_n_id);
                     // check if the player controls the node completely
                     const NEW_EDGE_UNIT_COST: UnitCount = 2;
                     let game_node = self.game_state.player_node_mut(player_id);
                     if game_node.controlled_by() == player_id {
-                        //println!("control matches");
                         if let Some(troop) = game_node.troop_of_player_mut(player_id) {
-                            //println!("troop found: {:?}", troop);
                             // check if the node can pay the unit cost
                             if troop.count >= NEW_EDGE_UNIT_COST {
-                                //println!("edge cost ok, adding edge");
                                 // pay the price and add the new edge
                                 troop.remove_units(NEW_EDGE_UNIT_COST);
                                 self.add_edge(self.game_state.player_node_ids[usize::from(player_id)], target_n_id);
-                                added = true;
+                                //added = true;
                             }
                         }
                     }
                 }
-                if added {
-                    // reset the target edge
-                    self.game_state.player_new_edge_n_ids[usize::from(player_id)] = None;
-                }
+                self.game_state.player_new_edge_n_ids[usize::from(player_id)] = None;
             }
             _ => {}
         }
