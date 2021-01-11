@@ -769,11 +769,10 @@ impl event::EventHandler for MainState {
                     if game_node.controlled_by() == player_id {
                         if let Some(troop) = game_node.troop_of_player_mut(player_id) {
                             // check if the node can pay the unit cost
-                            if troop.count >= NEW_EDGE_UNIT_COST {
+                            if troop.count > NEW_EDGE_UNIT_COST {
                                 // pay the price and add the new edge
                                 troop.remove_units(NEW_EDGE_UNIT_COST);
                                 self.add_edge(self.game_state.player_node_ids[usize::from(player_id)], target_n_id);
-                                //added = true;
                             }
                         }
                     }

@@ -277,7 +277,7 @@ impl Edge {
         }
     }
     pub fn lengthen(&mut self, amount: f32) {
-        const MAX_LENGTH: f32 = 800.0;
+        const MAX_LENGTH: f32 = 1200.0;
         if self.relaxed_length < MAX_LENGTH {
             self.relaxed_length += amount;
             if self.relaxed_length > MAX_LENGTH {

@@ -11,6 +11,7 @@ use rand::seq::{SliceRandom, IteratorRandom};
 use ggez::Context;
 use ggez::graphics::Color;
 use crate::game_mechanics::CellType::Basic;
+use std::cmp::Ordering;
 
 pub struct GameState {
     /// on which node each player currently is
@@ -411,6 +412,7 @@ pub struct EdgeFight {
     fight: Fight,
     acceleration: f32,
     velocity: f32,
+    win_timer: f32,
     pub advancement: f32,
 }
 
@@ -421,6 +423,7 @@ impl EdgeFight {
             fight: Fight::new(),
             acceleration: 0.0,
             velocity: 0.0,
+            win_timer: 0.0,
             advancement: pos,
         }
     }
@@ -445,7 +448,7 @@ impl EdgeFight {
         self.advancement += self.velocity * dt / edge_length.sqrt();
         // apply friction
         self.acceleration *= 0.6;
-        self.velocity *= 0.985;
+        self.velocity *= 0.95;
         // clone your troops to check for possible losses afterwards
         let troop_copy = self.troops.clone();
         // advance the fight if it is time for that
@@ -472,14 +475,29 @@ impl EdgeFight {
     /// Returns the last troop standing if there is only one left
     // call this function to determine whether this EdgeFight can be disbanded,
     // sending the remaining troop back on track
-    fn winner(&self) -> Option<(usize, Troop)> {
+    fn winner(&mut self, dt: f32) -> Option<(usize, Troop)> {
         let troop_count_per_direction = [self.troops[0].len(), self.troops[1].len()];
-        if troop_count_per_direction[0] == 1 && troop_count_per_direction[1] == 0 {
+        let winner = if troop_count_per_direction[0] == 1 && troop_count_per_direction[1] == 0 {
             // direction 0 has won
-            return Some((0, self.troops[0][0]));
+            Some((0, self.troops[0][0]))
         } else if troop_count_per_direction[0] == 0 && troop_count_per_direction[1] == 1 {
             // direction 1 has won
-            return Some((1, self.troops[1][0]));
+            Some((1, self.troops[1][0]))
+        } else {
+            // no winner, reset the win timer
+            self.win_timer = 0.0;
+            None
+        };
+
+        // TODO: don't kill this fight the instant a winner emerges; instead let it move on a little so the winner can enjoy the gained acceleration
+        if winner.is_some() {
+            const WIN_DURATION: f32 = 0.65;
+            if self.win_timer >= WIN_DURATION {
+                return winner;
+            } else {
+                // advance the win-timer
+                self.win_timer += dt;
+            }
         }
         None
     }
@@ -601,6 +619,26 @@ impl AdvancingTroop {
     }
 }
 
+impl PartialEq for AdvancingTroop {
+    fn eq(&self, other: &Self) -> bool {
+        self.advancement == other.advancement
+    }
+}
+
+impl PartialOrd for AdvancingTroop {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.advancement.partial_cmp(&other.advancement)
+    }
+}
+
+impl Eq for AdvancingTroop {}
+
+impl Ord for AdvancingTroop {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.advancement.partial_cmp(&other.advancement).unwrap()
+    }
+}
+
 /// holds the units currently traveling the edge and other game related edge data
 pub struct GameEdge {
     /// holds tuples containing the relative advancement of the unit and the player id;
@@ -659,7 +697,6 @@ impl GameEdge {
     /// WARNING: This function does not check for a maximum unit count. Handle with care.
     fn add_troop_advanced(&mut self, start_index: usize, troop: Troop, advancement: f32) {
         // add them so that the vector remains sorted
-        // TODO: it seems that this kind of pseudo-sorting doesn't work so try what happens if we instead actually sort each vec after insertion (but test before you do that, I might just have found and fixed the bug here)
         let mut not_inserted = true;
         if start_index == 0 {
             for i in 0..self.advancing_troops[start_index].len() {
@@ -728,13 +765,13 @@ impl GameEdge {
                 }
                 return false;
             }
-            else if fight_happened {
-                if let Some((st_index, troop)) = fight.winner() {
+            //else if fight_happened {
+                else if let Some((st_index, troop)) = fight.winner(dt) {
                     units_to_add.push((st_index, troop, fight.advancement));
                     return false;
                 }
-                return true;
-            }
+                //return true;
+            //}
             else { true }
         });
         for w in units_to_add {
@@ -766,11 +803,11 @@ impl GameEdge {
             let mut checked_players: SmallVec<[PlayerId; 8]> = smallvec![ANYONE_PLAYER]; // ANYONE_PLAYER doesn't need to be checked because its units don't interfere
             for advancing_troop in self.advancing_troops[0].iter_mut() {  // first elements are the oldest/most advanced
                 let my_player = advancing_troop.troop.player;
-                if checked_players.contains(&my_player) { continue; } // TODO: check what happens if we turn this optimization off (check whether it fixes the left over bugs)
+                if checked_players.contains(&my_player) { continue; }
                 let mut no_fight_found = true;
                 // go through all known fights
                 for edge_fight in self.fights.iter_mut() {
-                    if edge_fight.advancement <= advancing_troop.advancement && edge_fight.advancement >= advancing_troop.advancement - advance {
+                    if advancing_troop.advancement - advance <= edge_fight.advancement && edge_fight.advancement <= advancing_troop.advancement {
                         // you've just passed this fight, join it
                         edge_fight.add_troop(0, &mut advancing_troop.troop);
                         no_fight_found = false;
@@ -790,7 +827,7 @@ impl GameEdge {
                 let mut no_fight_found = true;
                 // go through all known fights
                 for edge_fight in self.fights.iter_mut() {
-                    if edge_fight.advancement >= advancing_troop.advancement && edge_fight.advancement <= advancing_troop.advancement + advance {
+                    if advancing_troop.advancement <= edge_fight.advancement && edge_fight.advancement <= advancing_troop.advancement + advance {
                         // you've just passed this fight, join it
                         edge_fight.add_troop(1, &mut advancing_troop.troop);
                         no_fight_found = false;
