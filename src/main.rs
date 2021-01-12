@@ -4,6 +4,7 @@
 use ggez;
 use ggez::{event, conf};
 use ggez::graphics;
+use ggez::mint::{Vector2 as mVector2};
 use ggez::nalgebra::{Point2, Vector2, clamp, partial_clamp};
 use ggez::nalgebra as na;
 use ggez::timer;
@@ -44,6 +45,7 @@ struct MainState {
     game_state: GameState,
     physics_state: PhysicsState,
     edge_sprite_width: f32,
+    spr_b_node_dim: (u16, u16),
     spr_b_node: SpriteBatch,
     spr_b_edge: SpriteBatch,
     unit_count_texts: Vec<Text>,
@@ -52,12 +54,14 @@ struct MainState {
 impl MainState {
     fn new(ctx: &mut Context) -> MainState {
         let img = Image::new(ctx, "/edge.png").unwrap();
+        let spr_sheet = Image::new(ctx, "/spritesheet.png").unwrap();
         MainState {
             players: Vec::new(),
             game_state: GameState::new(),
             physics_state: PhysicsState::new(),
             edge_sprite_width: img.width() as f32,
-            spr_b_node: SpriteBatch::new(Image::new(ctx, "/spritesheet.png").unwrap()),
+            spr_b_node_dim: (spr_sheet.width(), spr_sheet.height()),
+            spr_b_node: SpriteBatch::new(spr_sheet),
             spr_b_edge: SpriteBatch::new(img),
             unit_count_texts: Vec::new(),
         }
@@ -208,6 +212,7 @@ impl MainState {
     fn color_no_player() -> Color {
         Color::new(0.6, 0.6, 0.6, 1.0)
     }
+    fn color_bg() -> Color { graphics::Color::from((80u8, 80u8, 80u8)) }
 
     fn player_color_static(id: PlayerId, players: &[PlayerState]) -> Color {
         match id {
@@ -240,13 +245,24 @@ impl MainState {
             .color(if g_node.fighting() { Self::battle_color_static(&self.players, ctx, g_node.troop_iter()) } else { self.player_color(ctrl) });
 
         use CellType::*;
-        p.src = Rect::new( match g_node.cell_type() {
-            Cancer => 0.0,
-            Propulsion => 0.25,
-            Wall => 0.5,
-            _ => 0.75 //384.0,
-        }, 0.0, 0.25, 1.0);
-
+        let c_type = g_node.cell_type();
+        let native_rect = match c_type {
+            Cancer => Rect::new(1.0, 1.0, 175.0, 175.0),
+            Propulsion => Rect::new(178.0, 1.0, 140.0, 140.0),
+            Wall => Rect::new(320.0, 1.0, 140.0, 140.0),
+            _ => Rect::new(462.0, 1.0, 124.0, 124.0),
+        };
+        let (w, h) = self.spr_b_node_dim;
+        let (w, h) = (w as f32, h as f32);
+        p.src = Rect::new(native_rect.x / w, native_rect.y / h, native_rect.w / w, native_rect.h / h);
+        /*
+        p.scale = match c_type {
+            Cancer => mVector2::from([1.25f32, 1.25f32]),
+            Propulsion => mVector2::from([1.25f32, 1.25f32]),
+            Wall => mVector2::from([1.0f32, 1.0f32]),
+            _ => mVector2::from([1.0f32, 1.0f32]),
+        };
+        */
         p
     }
 
@@ -267,7 +283,7 @@ impl MainState {
             .color(self.player_color(p_id_controlling))
     }
 
-    fn draw_edge(players: &[PlayerState], ctx: &Context, spr_width: f32, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge) {
+    fn draw_edge(players: &[PlayerState], ctx: &Context, spr_width: f32, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge, spr_b_node_dim: (u16, u16)) {
         let (node1, node2) = (physics_state.node_at(edge.node_indices[0]),physics_state.node_at(edge.node_indices[1]));
         let vec: Vector2<f32> = node2.position - node1.position;
         let rotation = na::RealField::atan2(vec.y, vec.x);
@@ -279,12 +295,14 @@ impl MainState {
             .scale(Vector2::new(vec.norm() / spr_width, 1.0))
             .color(Self::player_color_static(g_edge.controlled_by(), players))
         );
+        let (w, h) = spr_b_node_dim;
+        let (w, h) = (w as f32, h as f32);
         // calculate the troop positions based on the starting point of the edge and the advancement of the troops
         for adv_troop in g_edge.troop_iter() {
             let pos = node1.position + vec * adv_troop.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
-                .src(Rect::new(0.75,0.0,0.25,1.0))
+                .src(Rect::new(462.0 / w, 1.0 / h, 124.0 / w, 124.0 / h))
                 .dest(pos)
                 .scale(Vector2::new(0.5, 0.5))
                 .color(Self::player_color_static(adv_troop.troop.player, players))
@@ -295,7 +313,7 @@ impl MainState {
             let pos = node1.position + vec * fight.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
-                .src(Rect::new(0.75,0.0,0.25,1.0))
+                .src(Rect::new(462.0 / w, 1.0 / h, 124.0 / w, 124.0 / h))
                 .dest(pos)
                 .scale(Vector2::new(0.75, 0.75))
                 .color(Self::battle_color_static(players, ctx, fight.troop_iter()))
@@ -577,18 +595,43 @@ impl event::EventHandler for MainState {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        graphics::clear(ctx, graphics::Color::from((80u8, 80u8, 80u8)));
+        graphics::clear(ctx, Self::color_bg());
 
         // Draw the player positions
         for (i, player) in self.players.iter().enumerate() {
             let p = self.draw_param_node(self.game_state.player_node_ids[i], ctx)
-                .scale(Vector2::new(1.25, 1.25))
+                .scale(Vector2::new(1.5, 1.5))
                 .color(if let NodeEdgeOrNothing::Node = player.current_removal_type() { BLACK } else { WHITE } );
             self.spr_b_node.add(p);
         }
         // Fill the nodes spritebatch
         for (i, node) in self.physics_state.node_iter().enumerate() {
+            if !self.game_state.player_node_ids.contains(&(i as NId)) {
+                // draw the background
+                // TODO: instead of using scale here better use some prepared sprites
+                let scale = match self.game_state.nodes[usize::from(i)].cell_type() {
+                    CellType::Cancer => Vector2::new(1.75, 1.75),
+                    CellType::Propulsion => Vector2::new(1.75, 1.75),
+                    _ => Vector2::new(1.6, 1.6),
+                };
+                let p = self.draw_param_node(i as NId, ctx)
+                    .scale(scale)
+                    .color(Self::color_bg());
+                self.spr_b_node.add(p);
+            }
+            if let CellType::Wall = self.game_state.nodes[usize::from(i)].cell_type() {
+                // for walls also draw over the middle portion
+                let (w, h) = self.spr_b_node_dim;
+                let (w, h) = (w as f32, h as f32);
+                let p = self.draw_param_node(i as NId, ctx)
+                    .color(Self::color_bg())
+                    .src(Rect::new(462.0 / w, 1.0 / h, 124.0 / w, 124.0 / h));
+                self.spr_b_node.add(p);
+            }
+            // draw the node itself
             self.spr_b_node.add(self.draw_param_node(i as NId, ctx));
+
+            // draw the unit text
             let g_node = &self.game_state.nodes[i];
             let ctrl = g_node.controlled_by();
             use UnitCountDrawMode::*;
@@ -632,7 +675,7 @@ impl event::EventHandler for MainState {
             for edge in self.physics_state.edge_iter() {
                 let g_edge = g_edge_iter.next().unwrap();
                 Self::draw_edge(&self.players, ctx, self.edge_sprite_width, &self.physics_state,
-                                &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge);
+                                &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge, self.spr_b_node_dim);
             }
         }
         // draw the possible new edge over the others to make it a bit more visible
@@ -809,7 +852,7 @@ pub fn main() -> GameResult {
         .window_mode(
             conf::WindowMode::default()
                 .fullscreen_type(conf::FullscreenType::Windowed)
-                .dimensions(1280.0 , 720.0)
+                .dimensions(1280.0, 720.0)
         )
         .window_setup(
             conf::WindowSetup::default().samples(

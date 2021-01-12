@@ -489,7 +489,7 @@ impl EdgeFight {
             None
         };
 
-        // TODO: don't kill this fight the instant a winner emerges; instead let it move on a little so the winner can enjoy the gained acceleration
+        // don't kill this fight the instant a winner emerges; instead let it move on a little so the winner can enjoy the gained acceleration
         if winner.is_some() {
             const WIN_DURATION: f32 = 0.65;
             if self.win_timer >= WIN_DURATION {

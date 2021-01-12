@@ -1,0 +1,95 @@
+{
+	"frames": {
+		"cell_cancer.png": {
+			"frame": {
+				"x": 1,
+				"y": 1,
+				"w": 175,
+				"h": 175
+			},
+			"rotated": false,
+			"trimmed": false,
+			"spriteSourceSize": {
+				"x": 0,
+				"y": 0,
+				"w": 175,
+				"h": 175
+			},
+			"sourceSize": {
+				"w": 175,
+				"h": 175
+			}
+		},
+		"cell_propulsion.png": {
+			"frame": {
+				"x": 178,
+				"y": 1,
+				"w": 140,
+				"h": 140
+			},
+			"rotated": false,
+			"trimmed": false,
+			"spriteSourceSize": {
+				"x": 0,
+				"y": 0,
+				"w": 140,
+				"h": 140
+			},
+			"sourceSize": {
+				"w": 140,
+				"h": 140
+			}
+		},
+		"cell_wall.png": {
+			"frame": {
+				"x": 320,
+				"y": 1,
+				"w": 140,
+				"h": 140
+			},
+			"rotated": false,
+			"trimmed": false,
+			"spriteSourceSize": {
+				"x": 0,
+				"y": 0,
+				"w": 140,
+				"h": 140
+			},
+			"sourceSize": {
+				"w": 140,
+				"h": 140
+			}
+		},
+		"node.png": {
+			"frame": {
+				"x": 462,
+				"y": 1,
+				"w": 124,
+				"h": 124
+			},
+			"rotated": false,
+			"trimmed": false,
+			"spriteSourceSize": {
+				"x": 0,
+				"y": 0,
+				"w": 124,
+				"h": 124
+			},
+			"sourceSize": {
+				"w": 124,
+				"h": 124
+			}
+		}
+	},
+	"meta": {
+		"app": "http://www.codeandweb.com/texturepacker",
+		"version": "1.0",
+		"image": "spritesheet.png",
+		"format": "RGBA8888",
+		"size": {
+			"w": 587,
+			"h": 177
+		},
+		"scale": "1"
+	}
+}
