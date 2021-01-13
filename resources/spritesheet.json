@@ -4,25 +4,25 @@
 			"frame": {
 				"x": 1,
 				"y": 1,
-				"w": 175,
-				"h": 175
+				"w": 140,
+				"h": 140
 			},
 			"rotated": false,
 			"trimmed": false,
 			"spriteSourceSize": {
 				"x": 0,
 				"y": 0,
-				"w": 175,
-				"h": 175
+				"w": 140,
+				"h": 140
 			},
 			"sourceSize": {
-				"w": 175,
-				"h": 175
+				"w": 140,
+				"h": 140
 			}
 		},
 		"cell_propulsion.png": {
 			"frame": {
-				"x": 178,
+				"x": 143,
 				"y": 1,
 				"w": 140,
 				"h": 140
@@ -42,7 +42,7 @@
 		},
 		"cell_wall.png": {
 			"frame": {
-				"x": 320,
+				"x": 285,
 				"y": 1,
 				"w": 140,
 				"h": 140
@@ -62,7 +62,7 @@
 		},
 		"node.png": {
 			"frame": {
-				"x": 462,
+				"x": 427,
 				"y": 1,
 				"w": 124,
 				"h": 124
@@ -87,8 +87,8 @@
 		"image": "spritesheet.png",
 		"format": "RGBA8888",
 		"size": {
-			"w": 587,
-			"h": 177
+			"w": 552,
+			"h": 142
 		},
 		"scale": "1"
 	}

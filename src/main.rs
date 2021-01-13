@@ -48,12 +48,14 @@ struct MainState {
     spr_b_node_dim: (u16, u16),
     spr_b_node: SpriteBatch,
     spr_b_edge: SpriteBatch,
+    spr_b_edge_bg: SpriteBatch,
     unit_count_texts: Vec<Text>,
 }
 
 impl MainState {
     fn new(ctx: &mut Context) -> MainState {
         let img = Image::new(ctx, "/edge.png").unwrap();
+        let spr_bg = Image::new(ctx, "/edge_bg.png").unwrap();
         let spr_sheet = Image::new(ctx, "/spritesheet.png").unwrap();
         MainState {
             players: Vec::new(),
@@ -63,6 +65,7 @@ impl MainState {
             spr_b_node_dim: (spr_sheet.width(), spr_sheet.height()),
             spr_b_node: SpriteBatch::new(spr_sheet),
             spr_b_edge: SpriteBatch::new(img),
+            spr_b_edge_bg: SpriteBatch::new(spr_bg),
             unit_count_texts: Vec::new(),
         }
     }
@@ -244,17 +247,8 @@ impl MainState {
             .dest(Point2::new(node.position.x, node.position.y))
             .color(if g_node.fighting() { Self::battle_color_static(&self.players, ctx, g_node.troop_iter()) } else { self.player_color(ctrl) });
 
-        use CellType::*;
         let c_type = g_node.cell_type();
-        let native_rect = match c_type {
-            Cancer => Rect::new(1.0, 1.0, 175.0, 175.0),
-            Propulsion => Rect::new(178.0, 1.0, 140.0, 140.0),
-            Wall => Rect::new(320.0, 1.0, 140.0, 140.0),
-            _ => Rect::new(462.0, 1.0, 124.0, 124.0),
-        };
-        let (w, h) = self.spr_b_node_dim;
-        let (w, h) = (w as f32, h as f32);
-        p.src = Rect::new(native_rect.x / w, native_rect.y / h, native_rect.w / w, native_rect.h / h);
+        p.src = self.draw_source_rect(&c_type);
         /*
         p.scale = match c_type {
             Cancer => mVector2::from([1.25f32, 1.25f32]),
@@ -264,6 +258,23 @@ impl MainState {
         };
         */
         p
+    }
+
+    fn draw_source_rect(&self, cell_type: &CellType) -> Rect {
+        Self::draw_source_rect_static(cell_type, self.spr_b_node_dim)
+    }
+
+    fn draw_source_rect_static(cell_type: &CellType, dimensions: (u16, u16)) -> Rect {
+        use CellType::*;
+        let native_rect = match cell_type {
+            Cancer => Rect::new(1.0, 1.0, 140.0, 140.0),
+            Propulsion => Rect::new(143.0, 1.0, 140.0, 140.0),
+            Wall => Rect::new(285.0, 1.0, 140.0, 140.0),
+            _ => Rect::new(427.0, 1.0, 124.0, 124.0),
+        };
+        let (w, h) = dimensions;
+        let (w, h) = (w as f32, h as f32);
+        Rect::new(native_rect.x / w, native_rect.y / h, native_rect.w / w, native_rect.h / h)
     }
 
     fn draw_param_edge(&self, edge: &Edge, g_edge: &GameEdge) -> DrawParam {
@@ -295,14 +306,13 @@ impl MainState {
             .scale(Vector2::new(vec.norm() / spr_width, 1.0))
             .color(Self::player_color_static(g_edge.controlled_by(), players))
         );
-        let (w, h) = spr_b_node_dim;
-        let (w, h) = (w as f32, h as f32);
+        let src_rect = Self::draw_source_rect_static(&CellType::Basic, spr_b_node_dim);
         // calculate the troop positions based on the starting point of the edge and the advancement of the troops
         for adv_troop in g_edge.troop_iter() {
             let pos = node1.position + vec * adv_troop.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
-                .src(Rect::new(462.0 / w, 1.0 / h, 124.0 / w, 124.0 / h))
+                .src(src_rect)
                 .dest(pos)
                 .scale(Vector2::new(0.5, 0.5))
                 .color(Self::player_color_static(adv_troop.troop.player, players))
@@ -313,7 +323,7 @@ impl MainState {
             let pos = node1.position + vec * fight.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
-                .src(Rect::new(462.0 / w, 1.0 / h, 124.0 / w, 124.0 / h))
+                .src(src_rect)
                 .dest(pos)
                 .scale(Vector2::new(0.75, 0.75))
                 .color(Self::battle_color_static(players, ctx, fight.troop_iter()))
@@ -597,6 +607,32 @@ impl event::EventHandler for MainState {
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         graphics::clear(ctx, Self::color_bg());
 
+        // Draw the edges chosen by the players
+        let mut add_last: SmallVec<[DrawParam; 8]> = smallvec![];
+        for (i, player) in self.players.iter().enumerate() {
+            // if the player is currently adding a new edge draw it (lightly) instead of the actually selected edge
+            if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[i] {
+                let mut p = self.draw_param_edge_from_n_ids([self.game_state.player_node_ids[i], target_n_id], i as PlayerId);
+                p.color.a = 0.5;    // draw it lightly
+                add_last.push(p);
+            }
+            else if let Some(edge_id) = self.game_state.player_edge_ids[i] {
+                let mut p = self.draw_param_edge(self.physics_state.edge_at(edge_id), &self.game_state.edges[usize::from(edge_id)])
+                    .color(if let NodeEdgeOrNothing::Edge = player.current_removal_type() { BLACK } else { WHITE } );
+                p.scale.y *= 1.75;
+                self.spr_b_edge_bg.add(p);
+            }
+        }
+        // Fill the edges spritebatch
+        {
+            let mut g_edge_iter = self.game_state.edges.iter();
+            for edge in self.physics_state.edge_iter() {
+                let g_edge = g_edge_iter.next().unwrap();
+                Self::draw_edge(&self.players, ctx, self.edge_sprite_width, &self.physics_state,
+                                &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge, self.spr_b_node_dim);
+            }
+        }
+
         // Draw the player positions
         for (i, player) in self.players.iter().enumerate() {
             let p = self.draw_param_node(self.game_state.player_node_ids[i], ctx)
@@ -610,9 +646,9 @@ impl event::EventHandler for MainState {
                 // draw the background
                 // TODO: instead of using scale here better use some prepared sprites
                 let scale = match self.game_state.nodes[usize::from(i)].cell_type() {
-                    CellType::Cancer => Vector2::new(1.75, 1.75),
-                    CellType::Propulsion => Vector2::new(1.75, 1.75),
-                    _ => Vector2::new(1.6, 1.6),
+                    CellType::Cancer => Vector2::new(1.65, 1.65),
+                    CellType::Propulsion => Vector2::new(1.65, 1.65),
+                    _ => Vector2::new(1.55, 1.55),
                 };
                 let p = self.draw_param_node(i as NId, ctx)
                     .scale(scale)
@@ -620,12 +656,9 @@ impl event::EventHandler for MainState {
                 self.spr_b_node.add(p);
             }
             if let CellType::Wall = self.game_state.nodes[usize::from(i)].cell_type() {
-                // for walls also draw over the middle portion
-                let (w, h) = self.spr_b_node_dim;
-                let (w, h) = (w as f32, h as f32);
                 let p = self.draw_param_node(i as NId, ctx)
                     .color(Self::color_bg())
-                    .src(Rect::new(462.0 / w, 1.0 / h, 124.0 / w, 124.0 / h));
+                    .src(self.draw_source_rect(&CellType::Basic));
                 self.spr_b_node.add(p);
             }
             // draw the node itself
@@ -653,43 +686,21 @@ impl event::EventHandler for MainState {
             }
         }
 
-        // Draw the edges chosen by the players
-        let mut add_last: SmallVec<[DrawParam; 8]> = smallvec![];
-        for (i, player) in self.players.iter().enumerate() {
-            // if the player is currently adding a new edge draw it (lightly) instead of the actually selected edge
-            if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[i] {
-                let mut p = self.draw_param_edge_from_n_ids([self.game_state.player_node_ids[i], target_n_id], i as PlayerId);
-                p.color.a = 0.5;    // draw it lightly
-                add_last.push(p);
-            }
-            else if let Some(edge_id) = self.game_state.player_edge_ids[i] {
-                let mut p = self.draw_param_edge(self.physics_state.edge_at(edge_id), &self.game_state.edges[usize::from(edge_id)])
-                    .color(if let NodeEdgeOrNothing::Edge = player.current_removal_type() { BLACK } else { WHITE } );
-                p.scale.y *= 2.0;
-                self.spr_b_edge.add(p);
-            }
-        }
-        // Fill the edges spritebatch
-        {
-            let mut g_edge_iter = self.game_state.edges.iter();
-            for edge in self.physics_state.edge_iter() {
-                let g_edge = g_edge_iter.next().unwrap();
-                Self::draw_edge(&self.players, ctx, self.edge_sprite_width, &self.physics_state,
-                                &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge, self.spr_b_node_dim);
-            }
-        }
         // draw the possible new edge over the others to make it a bit more visible
         for p in add_last.into_iter() {
             self.spr_b_edge.add(p);
         }
 
+        // Draw the edge_bg (currently only used for player selections)
+        graphics::draw(ctx, &self.spr_b_edge_bg, DrawParam::new())?;
         // Draw the edges
         graphics::draw(ctx, &self.spr_b_edge, DrawParam::new())?;
         // Draw the nodes
         graphics::draw(ctx, &self.spr_b_node, DrawParam::new())?;
         // Draw the unit count texts
-        graphics::draw_queued_text(ctx, DrawParam::new(), None, FilterMode::Linear);
+        graphics::draw_queued_text(ctx, DrawParam::new(), None, FilterMode::Linear)?;
 
+        self.spr_b_edge_bg.clear();
         self.spr_b_node.clear();
         self.spr_b_edge.clear();
 
