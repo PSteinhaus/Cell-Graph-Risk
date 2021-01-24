@@ -1,4 +1,6 @@
 use crate::{MainState, NId};
+use ggez::{Context, timer};
+use std::cmp::min;
 
 pub fn proximity_nodes(prox_nodes: &Vec<Vec<NId>>, n_id: NId) -> &[NId] {
     &prox_nodes[usize::from(n_id)]
@@ -9,9 +11,21 @@ impl MainState {
         proximity_nodes(&self.proximity_nodes, n_id)
     }
 
-    pub fn update_proximity_state(&mut self) {
-        // go through all physical nodes
-        for n_id in 0..self.node_count() {
+    pub fn update_proximity_state(&mut self, ctx: &mut Context) {
+        // go through a quarter of the nodes per loop cycle
+        // the reason for this is to balance the work of having
+        // to go through all nodes^2 all the time
+        const PHASES: usize = 8;
+        let phase = timer::ticks(ctx) % PHASES;
+        let count = self.node_count();
+        let part = count / PHASES;
+        let start = phase * part;
+        let end = if phase == PHASES - 1 {
+            count
+        } else {
+            start + part
+        };
+        for n_id in start..end {
             // reset the list of close nodes
             let prox_vec = &mut self.proximity_nodes[n_id];
             prox_vec.clear();

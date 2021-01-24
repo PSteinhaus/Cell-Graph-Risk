@@ -631,11 +631,7 @@ impl event::EventHandler for MainState {
                 self.remove_player(player);
             }
             // update the proximity state
-            // TODO: probably change this to use a timer instead of ticks
-            const TICKS_BETWEEN_PROXIMITY_UPDATES: usize = 16;
-            if timer::ticks(ctx) % TICKS_BETWEEN_PROXIMITY_UPDATES == 0 {
-                self.update_proximity_state();
-            }
+            self.update_proximity_state(ctx);
             // update the physics simulation
             self.physics_state.simulate_step(dur);
         }
