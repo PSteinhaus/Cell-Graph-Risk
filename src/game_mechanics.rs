@@ -1,4 +1,4 @@
-use crate::{NId, EId, PlayerId, NO_PLAYER, UnitCount, MAX_UNIT_COUNT, ANYONE_PLAYER, CANCER_PLAYER, NO_EDGE};
+use crate::{NId, EId, PlayerId, NO_PLAYER, UnitCount, MAX_UNIT_COUNT, ANYONE_PLAYER, CANCER_PLAYER, NO_EDGE, MainState};
 use std::collections::BTreeSet;
 use ggez::nalgebra::clamp;
 use smallvec::{SmallVec, smallvec};
@@ -12,6 +12,7 @@ use ggez::Context;
 use ggez::graphics::Color;
 use crate::game_mechanics::CellType::Basic;
 use std::cmp::Ordering;
+use crate::proximity::proximity_nodes;
 
 pub struct GameState {
     /// on which node each player currently is
@@ -209,13 +210,16 @@ impl GameState {
         return players_to_be_removed;
     }
     /// Returns players who have to be removed.
-    pub fn update(&mut self, physics_state: &PhysicsState, dt: f32) -> SmallVec<[PlayerId; 4]> {
+    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>) -> SmallVec<[PlayerId; 4]> {
         // update all nodes
         let distribute_troops   = self.check_for_troop_distribution(dt);
         let production_producer = self.check_for_unit_production_producer(dt);
         let production_cancer   = self.check_for_unit_production_cancer(dt);
         // collect the nodes that switch their control along the way
         let mut control_changed_nodes = SmallVec::<[NId; 32]>::new();
+        let mut edges_to_try_add = SmallVec::<[(NId, NId); 32]>::new();
+        // I need to check different nodes at the same time, so I need a raw pointer to go around Rusts safety checks
+        let nodes_ptr: *const Vec<GameNode> = &self.nodes;
         use CellType::*;
         for (n_id, node) in self.nodes.iter_mut().enumerate() {
             // first manage possible fights
@@ -270,7 +274,19 @@ impl GameState {
                 },
                 Cancer => {
                     if production_cancer { node.add_units(CANCER_PLAYER, 1); }
-                    // TODO: let cancer try to connect to other nodes in range
+                    // let cancer try to connect to other nodes in range
+                    let neighbors: SmallVec<[NId; 16]> = physics_state.neighbors(n_id as NId).collect();
+                    for close_n_id in proximity_nodes(prox_nodes, n_id as NId) {
+                        let close_n_id = *close_n_id;
+                        // here is a hidden assumption: there is no second proximity check,
+                        // so the distance for which an edge can be added is given by the proximity constant used in proximity checking
+                        unsafe {
+                            let close_node = &(*nodes_ptr)[usize::from(close_n_id)];
+                            if (*close_node).controlled_by() != CANCER_PLAYER && !neighbors.contains(&(close_n_id as NId)) {
+                                edges_to_try_add.push((n_id as NId, close_n_id as NId));
+                            }
+                        }
+                    }
                 },
                 _ => {}
             }
@@ -343,6 +359,11 @@ impl GameState {
                     }
                 }
             }
+        }
+        // try to add edges
+        for (source_n_id, target_n_id) in edges_to_try_add {
+            println!("trying to add cancer edge");
+            MainState::try_add_edge(self, physics_state, source_n_id, target_n_id);
         }
         // update all edges
         for (e_id, edge) in self.edges.iter_mut().enumerate() {

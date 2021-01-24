@@ -23,9 +23,12 @@ use ggez::input::gamepad::gilrs::ev::Button::South;
 use smallvec::{SmallVec, smallvec};
 use std::mem::transmute;
 use std::cmp::{max, min};
+use crate::text::SpriteText;
 
 mod physics;
 mod game_mechanics;
+mod text;
+mod proximity;
 mod helpers;
 
 type PlayerId = u8;             // more than 255 players shouldn't be needed
@@ -44,12 +47,14 @@ struct MainState {
     players: Vec<PlayerState>,
     game_state: GameState,
     physics_state: PhysicsState,
+    proximity_nodes: Vec<Vec<NId>>,
     edge_sprite_width: f32,
     spr_b_node_dim: (u16, u16),
     spr_b_node: SpriteBatch,
     spr_b_edge: SpriteBatch,
     spr_b_edge_bg: SpriteBatch,
-    unit_count_texts: Vec<Text>,
+    spr_b_text: SpriteText,
+    //unit_count_texts: Vec<Text>,
 }
 
 impl MainState {
@@ -57,16 +62,19 @@ impl MainState {
         let img = Image::new(ctx, "/edge.png").unwrap();
         let spr_bg = Image::new(ctx, "/edge_bg.png").unwrap();
         let spr_sheet = Image::new(ctx, "/spritesheet.png").unwrap();
+        let spr_text = Image::new(ctx, "/trebuchet_ms_regular_24.png").unwrap();
         MainState {
             players: Vec::new(),
             game_state: GameState::new(),
             physics_state: PhysicsState::new(),
+            proximity_nodes: Vec::new(),
             edge_sprite_width: img.width() as f32,
             spr_b_node_dim: (spr_sheet.width(), spr_sheet.height()),
             spr_b_node: SpriteBatch::new(spr_sheet),
             spr_b_edge: SpriteBatch::new(img),
             spr_b_edge_bg: SpriteBatch::new(spr_bg),
-            unit_count_texts: Vec::new(),
+            spr_b_text: SpriteText::new(spr_text),
+            //unit_count_texts: Vec::new(),
         }
     }
 
@@ -79,10 +87,13 @@ impl MainState {
         self.physics_state.add_node(position);
         // add to game state
         self.game_state.add_node(cell_type);
+        // reserve a vector for the proximity state
+        self.proximity_nodes.push(Vec::new());
+
         // reserve a text for unit count
-        let txt_fragm = TextFragment::new("42").scale(Scale::uniform(200.0));
-        let txt = Text::new(txt_fragm);
-        self.unit_count_texts.push(txt);
+        //let txt_fragm = TextFragment::new("42").scale(Scale::uniform(200.0));
+        //let txt = Text::new(txt_fragm);
+        //self.unit_count_texts.push(txt);
     }
 
     fn set_unit_count_text(texts: &mut [Text], n_id: usize, str: String) {
@@ -107,6 +118,8 @@ impl MainState {
             let e_id = *self.physics_state.node_at(node_index).edge_indices.last().unwrap();
             self.remove_edge(e_id);
         }
+        // remove it from the proximity state
+        self.proximity_nodes.swap_remove(usize::from(node_index));
         // remove from game state
         self.game_state.remove_node(node_index);
         // remove it from physics
@@ -126,12 +139,16 @@ impl MainState {
     }
 
     fn add_edge(&mut self, node1_index: NId, node2_index: NId) -> bool {
+        Self::add_edge_static(&mut self.physics_state, &mut self.game_state, node1_index, node2_index)
+    }
+
+    fn add_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, node1_index: NId, node2_index: NId) -> bool {
         // first check if you can add this edge
-        if self.physics_state.can_add_edge(node1_index, node2_index) {
+        if p_state.can_add_edge(node1_index, node2_index) {
             // add to physics
-            self.physics_state.add_edge(node1_index, node2_index);
+            p_state.add_edge(node1_index, node2_index);
             // add to game state
-            self.game_state.add_edge(&[node1_index, node2_index]);
+            g_state.add_edge(&[node1_index, node2_index]);
             return true;
         }
         return false;
@@ -502,6 +519,23 @@ impl MainState {
             }
         }
     }
+
+    pub fn try_add_edge(g_state: &mut GameState, p_state: &mut PhysicsState, start_n_id: NId, target_n_id: NId) -> bool {
+        const NEW_EDGE_UNIT_COST: UnitCount = 2;
+        let game_node = &mut g_state.nodes[usize::from(start_n_id)];
+        let ctrl = game_node.controlled_by();
+        if ctrl != NO_PLAYER {
+            if let Some(troop) = game_node.troop_of_player_mut(ctrl) {
+                // check if the node can pay the unit cost
+                if troop.count > NEW_EDGE_UNIT_COST {
+                    // pay the price and add the new edge
+                    troop.remove_units(NEW_EDGE_UNIT_COST);
+                    return Self::add_edge_static(p_state, g_state,start_n_id, target_n_id);
+                }
+            }
+        }
+        return false;
+    }
 }
 
 #[repr(u16)]
@@ -578,10 +612,10 @@ enum NodeEdgeOrNothing {
 impl event::EventHandler for MainState {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         let dt = timer::delta(ctx);
-        if timer::ticks(ctx) % 100 == 0 {
+        //if timer::ticks(ctx) % 100 == 0 {
             //println!("Delta frame time: {:?} ", dt);
             //println!("Average FPS: {}", timer::fps(ctx));
-        }
+        //}
         // handle user input
         self.handle_input(ctx);
 
@@ -592,9 +626,15 @@ impl event::EventHandler for MainState {
             let ratio = (DESIRED_DELTA / secs) * thread_rng().gen_range(0.997, 1.003);
             let dur = ratio * secs;
             // update the game state
-            let players_to_be_removed = self.game_state.update(&self.physics_state, dur);
+            let players_to_be_removed = self.game_state.update(&mut self.physics_state, dur, &mut self.proximity_nodes);
             for player in players_to_be_removed.into_iter() {
                 self.remove_player(player);
+            }
+            // update the proximity state
+            // TODO: probably change this to use a timer instead of ticks
+            const TICKS_BETWEEN_PROXIMITY_UPDATES: usize = 16;
+            if timer::ticks(ctx) % TICKS_BETWEEN_PROXIMITY_UPDATES == 0 {
+                self.update_proximity_state();
             }
             // update the physics simulation
             self.physics_state.simulate_step(dur);
@@ -676,12 +716,17 @@ impl event::EventHandler for MainState {
             match u_draw_mode {
                 NoDrawing => {},
                 Units => {
-                    Self::set_unit_count_text(&mut self.unit_count_texts, i, g_node.troop_of_player(ctrl).unwrap().count.to_string());
-                    graphics::queue_text(ctx, &self.unit_count_texts[i], node.position, Some(WHITE));
+                    let unit_count_string = g_node.troop_of_player(ctrl).unwrap().count.to_string();
+                    self.spr_b_text.add(unit_count_string.as_str(),
+                                        DrawParam::default().dest(node.position).scale(Vector2::new(4.0, 4.0)).offset(Point2::new(0.5, 0.5)).color(WHITE));
+                    //Self::set_unit_count_text(&mut self.unit_count_texts, i, unit_count_string);
+                    //graphics::queue_text(ctx, &self.unit_count_texts[i], node.position, Some(WHITE));
                 },
                 DesiredCount => {
-                    Self::set_unit_count_text(&mut self.unit_count_texts, i, g_node.desired_unit_count().to_string());
-                    graphics::queue_text(ctx, &self.unit_count_texts[i], node.position, Some(BLACK));
+                    self.spr_b_text.add(g_node.desired_unit_count().to_string().as_str(),
+                                        DrawParam::default().dest(node.position).scale(Vector2::new(4.0, 4.0)).offset(Point2::new(0.5, 0.5)).color(BLACK));
+                    //Self::set_unit_count_text(&mut self.unit_count_texts, i, g_node.desired_unit_count().to_string());
+                    //graphics::queue_text(ctx, &self.unit_count_texts[i], node.position, Some(BLACK));
                 },
             }
         }
@@ -698,11 +743,13 @@ impl event::EventHandler for MainState {
         // Draw the nodes
         graphics::draw(ctx, &self.spr_b_node, DrawParam::new())?;
         // Draw the unit count texts
-        graphics::draw_queued_text(ctx, DrawParam::new(), None, FilterMode::Linear)?;
+        graphics::draw(ctx, &self.spr_b_text, DrawParam::new())?;
+        //graphics::draw_queued_text(ctx, DrawParam::new(), None, FilterMode::Linear)?;
 
         self.spr_b_edge_bg.clear();
         self.spr_b_node.clear();
         self.spr_b_edge.clear();
+        self.spr_b_text.clear();
 
         graphics::present(ctx)?;
         Ok(())
@@ -818,18 +865,8 @@ impl event::EventHandler for MainState {
                 // check if there's a new edge to add
                 if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[usize::from(player_id)] {
                     // check if the player controls the node completely
-                    const NEW_EDGE_UNIT_COST: UnitCount = 2;
-                    let game_node = self.game_state.player_node_mut(player_id);
-                    if game_node.controlled_by() == player_id {
-                        if let Some(troop) = game_node.troop_of_player_mut(player_id) {
-                            // check if the node can pay the unit cost
-                            if troop.count > NEW_EDGE_UNIT_COST {
-                                // pay the price and add the new edge
-                                troop.remove_units(NEW_EDGE_UNIT_COST);
-                                self.add_edge(self.game_state.player_node_ids[usize::from(player_id)], target_n_id);
-                            }
-                        }
-                    }
+                    let p_n_id = self.game_state.player_node_ids[usize::from(player_id)];
+                    Self::try_add_edge(&mut self.game_state, &mut self.physics_state, p_n_id, target_n_id);
                 }
                 self.game_state.player_new_edge_n_ids[usize::from(player_id)] = None;
             }
@@ -841,6 +878,7 @@ impl event::EventHandler for MainState {
             self.players[usize::from(player_id)].reset_button_pressed_duration(btn);
         }
     }
+
     fn resize_event(&mut self, ctx: &mut Context, width: f32, height: f32) {
         println!("Resized screen to {}, {}", width, height);
         // set to my native screen resolution just to have some convention to work with
