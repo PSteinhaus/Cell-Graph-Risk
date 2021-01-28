@@ -52,15 +52,12 @@ struct MainState {
     spr_b_node_dim: (u16, u16),
     spr_b_node: SpriteBatch,
     spr_b_edge: SpriteBatch,
-    spr_b_edge_bg: SpriteBatch,
     spr_b_text: SpriteText,
-    //unit_count_texts: Vec<Text>,
 }
 
 impl MainState {
     fn new(ctx: &mut Context) -> MainState {
         let img = Image::new(ctx, "/edge.png").unwrap();
-        let spr_bg = Image::new(ctx, "/edge_bg.png").unwrap();
         let spr_sheet = Image::new(ctx, "/spritesheet.png").unwrap();
         let spr_text = Image::new(ctx, "/trebuchet_ms_regular_24.png").unwrap();
         MainState {
@@ -72,9 +69,7 @@ impl MainState {
             spr_b_node_dim: (spr_sheet.width(), spr_sheet.height()),
             spr_b_node: SpriteBatch::new(spr_sheet),
             spr_b_edge: SpriteBatch::new(img),
-            spr_b_edge_bg: SpriteBatch::new(spr_bg),
             spr_b_text: SpriteText::new(spr_text),
-            //unit_count_texts: Vec::new(),
         }
     }
 
@@ -300,29 +295,70 @@ impl MainState {
 
     fn draw_param_edge_from_n_ids(&self, n_ids: [NId; 2], p_id_controlling: PlayerId) -> DrawParam {
         let (node1, node2) = (self.physics_state.node_at(n_ids[0]), self.physics_state.node_at(n_ids[1]));
+        let (g_node1, g_node2) = (&self.game_state.nodes[usize::from(n_ids[0])], &self.game_state.nodes[usize::from(n_ids[1])]);
         let vec: Vector2<f32> = node2.position - node1.position;
-        let rotation = na::RealField::atan2(vec.y, vec.x);
 
-        DrawParam::new()
-            .offset(Point2::new(0.0, 0.5))
-            .dest(Point2::new(node1.position.x, node1.position.y))
-            .rotation(rotation)
-            .scale(Vector2::new(vec.norm() / self.edge_sprite_width, 1.0))
-            .color(self.player_color(p_id_controlling))
+        Self::draw_param_edge_static(
+            g_node1, g_node2,
+            node1.position,
+            vec,
+            self.edge_sprite_width,
+            p_id_controlling,
+            &self.players
+        )
     }
 
-    fn draw_edge(players: &[PlayerState], ctx: &Context, spr_width: f32, physics_state: &PhysicsState, spr_batch_edge: &mut SpriteBatch, spr_batch_troop: &mut SpriteBatch, edge: &Edge, g_edge: &GameEdge, spr_b_node_dim: (u16, u16)) {
-        let (node1, node2) = (physics_state.node_at(edge.node_indices[0]),physics_state.node_at(edge.node_indices[1]));
-        let vec: Vector2<f32> = node2.position - node1.position;
+    fn draw_param_edge_static(g_node1: &GameNode, g_node2: &GameNode, pos: Point2<f32>, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState]) -> DrawParam {
         let rotation = na::RealField::atan2(vec.y, vec.x);
-        // draw the edge
-        spr_batch_edge.add(DrawParam::new()
+        DrawParam::new()
             .offset(Point2::new(0.0, 0.5))
-            .dest(Point2::new(node1.position.x, node1.position.y))
+            .src(Self::edge_src_rect(g_node1, g_node2))
+            .dest(Point2::new(pos.x, pos.y))
             .rotation(rotation)
             .scale(Vector2::new(vec.norm() / spr_width, 1.0))
-            .color(Self::player_color_static(g_edge.controlled_by(), players))
-        );
+            .color(Self::player_color_static(p_id_controlling, players))
+    }
+
+    fn edge_src_rect(g_node1: &GameNode, g_node2: &GameNode) -> Rect {
+        use CellType::*;
+        return if let (Wall, Wall) = (g_node1.cell_type(), g_node2.cell_type()) {
+            Self::edge_src_rect_bg()
+        } else {
+            Self::edge_src_rect_main()
+        }
+    }
+
+    fn edge_src_rect_main() -> Rect {
+        Rect::new(0., 0., 1., 0.5)
+    }
+
+    fn edge_src_rect_bg() -> Rect {
+        Rect::new(0., 0.5, 1., 0.5)
+    }
+
+    fn draw_edge(players: &[PlayerState],
+                 ctx: &Context,
+                 spr_width: f32,
+                 physics_state: &PhysicsState,
+                 spr_batch_edge: &mut SpriteBatch,
+                 spr_batch_troop: &mut SpriteBatch,
+                 edge: &Edge,
+                 g_edge: &GameEdge,
+                 g_nodes: &[GameNode],
+                 spr_b_node_dim: (u16, u16))
+    {
+        let (node1, node2) = (physics_state.node_at(edge.node_indices[0]),physics_state.node_at(edge.node_indices[1]));
+        let (g_node1, g_node2) = (&g_nodes[usize::from(edge.node_indices[0])], &g_nodes[usize::from(edge.node_indices[1])]);
+        let vec: Vector2<f32> = node2.position - node1.position;
+        // draw the edge
+        spr_batch_edge.add(Self::draw_param_edge_static(
+            g_node1, g_node2,
+            node1.position,
+            vec,
+            spr_width,
+            g_edge.controlled_by(),
+            players
+        ));
         let src_rect = Self::draw_source_rect_static(&CellType::Basic, spr_b_node_dim);
         // calculate the troop positions based on the starting point of the edge and the advancement of the troops
         for adv_troop in g_edge.troop_iter() {
@@ -654,9 +690,10 @@ impl event::EventHandler for MainState {
             }
             else if let Some(edge_id) = self.game_state.player_edge_ids[i] {
                 let mut p = self.draw_param_edge(self.physics_state.edge_at(edge_id), &self.game_state.edges[usize::from(edge_id)])
-                    .color(if let NodeEdgeOrNothing::Edge = player.current_removal_type() { BLACK } else { WHITE } );
-                p.scale.y *= 1.75;
-                self.spr_b_edge_bg.add(p);
+                    .color(if let NodeEdgeOrNothing::Edge = player.current_removal_type() { BLACK } else { WHITE } )
+                    .src(Self::edge_src_rect_bg());
+                p.scale.y *= 1.70;
+                self.spr_b_edge.add(p);
             }
         }
         // Fill the edges spritebatch
@@ -665,7 +702,7 @@ impl event::EventHandler for MainState {
             for edge in self.physics_state.edge_iter() {
                 let g_edge = g_edge_iter.next().unwrap();
                 Self::draw_edge(&self.players, ctx, self.edge_sprite_width, &self.physics_state,
-                                &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge, self.spr_b_node_dim);
+                                &mut self.spr_b_edge, &mut self.spr_b_node, edge, g_edge, &self.game_state.nodes, self.spr_b_node_dim);
             }
         }
 
@@ -733,7 +770,7 @@ impl event::EventHandler for MainState {
         }
 
         // Draw the edge_bg (currently only used for player selections)
-        graphics::draw(ctx, &self.spr_b_edge_bg, DrawParam::new())?;
+        //graphics::draw(ctx, &self.spr_b_edge_bg, DrawParam::new())?;
         // Draw the edges
         graphics::draw(ctx, &self.spr_b_edge, DrawParam::new())?;
         // Draw the nodes
@@ -742,7 +779,7 @@ impl event::EventHandler for MainState {
         graphics::draw(ctx, &self.spr_b_text, DrawParam::new())?;
         //graphics::draw_queued_text(ctx, DrawParam::new(), None, FilterMode::Linear)?;
 
-        self.spr_b_edge_bg.clear();
+        //self.spr_b_edge_bg.clear();
         self.spr_b_node.clear();
         self.spr_b_edge.clear();
         self.spr_b_text.clear();
