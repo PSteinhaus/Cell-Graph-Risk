@@ -5,7 +5,7 @@ use rand::thread_rng;
 use smallvec::alloc::slice::{Iter, IterMut};
 use smallvec::{SmallVec, smallvec};
 
-use crate::{ANYONE_PLAYER, CANCER_PLAYER, PlayerId, UnitCount, NId, EId};
+use crate::{ANYONE_PLAYER, CANCER_PLAYER, PlayerId, UnitCount, NId, EId, NO_PLAYER};
 use crate::helpers::Timer;
 use crate::game_mechanics::{GameEdge, GameNode};
 use crate::physics::PhysicsState;
@@ -591,5 +591,44 @@ impl GameEdge {
         }
 
         self.check_for_fights(advance);
+    }
+}
+
+impl GameNode {
+    pub fn troop_iter(&self) -> Iter<Troop> {
+        self.troops.iter()
+    }
+
+    pub fn troop_of_player(&self, player_id: PlayerId) -> Option<&Troop> {
+        Troop::troop_of_player(&self.troops, player_id)
+    }
+
+    pub fn troop_of_player_mut(&mut self, player_id: PlayerId) -> Option<&mut Troop> {
+        Troop::troop_of_player_mut(&mut self.troops, player_id)
+    }
+
+    pub(crate) fn start_fight(&mut self) {
+        self.fight = Some(Fight::new());
+        self.set_controlled_by(NO_PLAYER);
+    }
+
+    pub fn fighting(&self) -> bool { self.fight.is_some() }
+
+    /// Returns whether the fight has ended (signaling the need for an update of the neighboring edges)
+    pub(crate) fn advance_fight(&mut self, dt: f32) -> bool {
+        if let Some(active_fight) = &mut self.fight {
+            active_fight.advance(self.troops.iter_mut(), dt);
+            // remove possible empty troops
+            self.troops.retain(|t| t.count != 0);
+            // check for a winner and end the fight
+            if let Some(winning_troop) = Fight::winner(self.troops.iter()) {
+                // hand control over to the new player
+                self.set_controlled_by(winning_troop.player);
+                // stop the fight
+                self.fight = None;
+                return true;
+            }
+        }
+        false
     }
 }

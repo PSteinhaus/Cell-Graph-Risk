@@ -543,43 +543,6 @@ impl GameNode {
         self.controlled_by == p_id || self.troops.iter().find(|x| x.player == p_id).is_some()
     }
 
-    pub fn troop_iter(&self) -> Iter<Troop> {
-        self.troops.iter()
-    }
-
-    pub fn troop_of_player(&self, player_id: PlayerId) -> Option<&Troop> {
-        Troop::troop_of_player(&self.troops, player_id)
-    }
-
-    pub fn troop_of_player_mut(&mut self, player_id: PlayerId) -> Option<&mut Troop> {
-        Troop::troop_of_player_mut(&mut self.troops, player_id)
-    }
-
-    fn start_fight(&mut self) {
-        self.fight = Some(Fight::new());
-        self.set_controlled_by(NO_PLAYER);
-    }
-
-    pub fn fighting(&self) -> bool { self.fight.is_some() }
-
-    /// Returns whether the fight has ended (signaling the need for an update of the neighboring edges)
-    fn advance_fight(&mut self, dt: f32) -> bool {
-        if let Some(active_fight) = &mut self.fight {
-            active_fight.advance(self.troops.iter_mut(), dt);
-            // remove possible empty troops
-            self.troops.retain(|t| t.count != 0);
-            // check for a winner and end the fight
-            if let Some(winning_troop) = Fight::winner(self.troops.iter()) {
-                // hand control over to the new player
-                self.set_controlled_by(winning_troop.player);
-                // stop the fight
-                self.fight = None;
-                return true;
-            }
-        }
-        false
-    }
-
     fn set_controlled_by(&mut self, p_id: PlayerId) {
         if self.controlled_by != p_id {
             // the controlling player changed, reset the send paths and the desired unit count
