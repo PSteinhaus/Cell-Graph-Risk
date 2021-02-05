@@ -285,12 +285,13 @@ impl GameState {
                     let neighbors: SmallVec<[NId; 16]> = physics_state.neighbors(n_id as NId).collect();
                     for close_n_id in proximity_nodes(prox_nodes, n_id as NId) {
                         let close_n_id = *close_n_id;
-                        // here is a hidden assumption: there is no second proximity check,
-                        // so the distance for which an edge can be added is given by the proximity constant used in proximity checking
-                        unsafe {
-                            let close_node = &(*nodes_ptr)[usize::from(close_n_id)];
-                            if (*close_node).controlled_by() != CANCER_PLAYER && !neighbors.contains(&(close_n_id as NId)) {
-                                edges_to_try_add.push((n_id as NId, close_n_id as NId));
+                        const CONNECTION_RANGE: f32 = 600.;
+                        if physics_state.distance(n_id as NId, close_n_id) <= CONNECTION_RANGE {
+                            unsafe {
+                                let close_node = &(*nodes_ptr)[usize::from(close_n_id)];
+                                if (*close_node).controlled_by() != CANCER_PLAYER && !neighbors.contains(&(close_n_id as NId)) {
+                                    edges_to_try_add.push((n_id as NId, close_n_id as NId));
+                                }
                             }
                         }
                     }

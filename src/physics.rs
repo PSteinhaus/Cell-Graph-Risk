@@ -89,6 +89,10 @@ impl PhysicsState {
         // (but don't check whether they're in bounds, as that's unnecessary for my purposes)
         node1_index != node2_index && !self.are_neighbors(node1_index, node2_index)
     }
+    pub fn distance(&self, node1_index: NId, node2_index: NId) -> f32 {
+        let (node1, node2) = (self.node_at(node1_index), self.node_at(node2_index));
+        distance(&node1.position, &node2.position)
+    }
     pub fn add_edge(&mut self, node1_index: NId, node2_index: NId) {
         let (node1, node2) = (self.node_at(node1_index), self.node_at(node2_index));
         // we have to calc the distance between the nodes first
