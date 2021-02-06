@@ -456,7 +456,8 @@ pub fn can_control(p_id: PlayerId, other_p_id: PlayerId) -> bool {
 #[derive(Copy, Clone)]
 pub enum CellType {
     Basic,
-    Propulsion,
+    Propulsion(f32, f32),    // holds the unit consumption (meaning when this value is >=1 a unit/units have to be removed)
+                             // and the current angle of the node
     Wall,
     Cancer,
     Producer /*{ prod_rate: f32 }*/,
@@ -613,4 +614,5 @@ impl GameNode {
     }
     pub fn controlled_by(&self) -> PlayerId { self.controlled_by }
     pub fn cell_type(&self) -> &CellType { &self.cell_type }
+    pub fn cell_type_mut(&mut self) -> &mut CellType { &mut self.cell_type }
 }

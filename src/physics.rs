@@ -227,6 +227,9 @@ impl Node {
     fn remove_edge(&mut self, edge_index: EId) {
         self.edge_indices.swap_remove(usize::from(self.edge_indices.iter().position(|x| *x == edge_index).unwrap()));
     }
+    pub fn add_velocity(&mut self, vel_change: Vector2<f32>) {
+        self.velocity += vel_change;
+    }
     fn apply_forces(&mut self, edges: &Vec<Edge>, node_index: NId) {
         // first apply friction
         self.velocity *= NODE_FRICTION_FACTOR;

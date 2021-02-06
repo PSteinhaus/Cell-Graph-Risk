@@ -232,51 +232,85 @@ impl MainState {
 
             // HANDLE STICK INPUT
             use Axis::*;
-            const DEADZONE: f32 = 0.75;
+            const DEADZONE: f32 = 0.70;
             // left stick
             let mut stick_active = true;
             let (x, y) = (gamepad.value(LeftStickX), -gamepad.value(LeftStickY));
-            if (x.powf(2.0) + y.powf(2.0)).sqrt() < DEADZONE {
+            let norm = (x.powf(2.0) + y.powf(2.0)).sqrt();
+            if norm < DEADZONE {
                 // set the cooldown to 0, since the cooldown is meant for when a stick is continually pressed
                 player.remove_left_axis_cooldown();
                 stick_active = false;
             }
             if gamepad.is_pressed(South) {
-                // new edge selection starts
-                let mut chosen_node = NO_NODE;
-                if stick_active {
-                    let angle = y.atan2(x);
-                    let player_n_id = usize::from(self.game_state.player_node_ids[player_id]);
-                    // find the target node for the new edge
-                    let mut smallest_diff: f32 = 1.5;  // the worst fit still needs to be better than this
-                    // go through all nodes and find those in range
-                    const NEW_EDGE_RANGE: f32 = 800.0;
-                    for (n_id, node) in self.physics_state.node_iter().enumerate() {
-                        if n_id == player_n_id { continue; }
-                        let vec = node.position - Self::player_node_static(&self.physics_state, &self.game_state, player_id as PlayerId).position;
-                        // first check if it's in range
-                        if vec.norm() <= NEW_EDGE_RANGE {
-                            // then check if this edge already exists
-                            if self.physics_state.neighbors(player_n_id as NId).find(|id| *id == n_id as NId).is_none() {
-                                // calc the angle
-                                let e_angle = vec.y.atan2(vec.x);
-                                let diff = angle_diff_abs(e_angle, angle);
-                                // check if it fits better than anything found until now
-                                if diff < smallest_diff {
-                                    smallest_diff = diff;
-                                    chosen_node = n_id as NId;
+                let g_node_ptr = self.game_state.player_node_mut(player_id as PlayerId) as *mut GameNode;
+                unsafe {
+                    match (*g_node_ptr).cell_type_mut() {
+                        CellType::Wall => {},
+                        CellType::Propulsion(consumption, current_angle) => {
+                            // boost the cell into the chosen direction, burning units in the process
+                            const BOOST_DEADZONE: f32 = 0.20;
+                            if norm > BOOST_DEADZONE {
+                                let angle = y.atan2(x);
+                                // calculate the boost intensity
+                                let boost = norm / 2.5;
+                                // calculate the consumption of units that this boost causes
+                                let new_consumption = *consumption + (boost / 10.);
+                                // check if the consumption need can be met
+                                let troop_op = (*g_node_ptr).troop_of_player_mut(player_id as PlayerId);
+                                if let Some(troop) = troop_op {
+                                    let cost = new_consumption.floor() as UnitCount;
+                                    if troop.count > cost {
+                                        // there are enough troops to pay the consumption need and still hold the node
+                                        troop.remove_units(cost);
+                                        *consumption = new_consumption % 1.;
+                                        *current_angle = angle;
+                                        // now that the cost has been payed boost the node
+                                        let player_n_id = usize::from(self.game_state.player_node_ids[player_id]) as NId;
+                                        let vel_change = Vector2::new(boost * angle.cos(), boost * angle.sin());
+                                        self.physics_state.node_at_mut(player_n_id).add_velocity(vel_change);
+                                    }
                                 }
                             }
                         }
+                        _ => {
+                            // new edge selection starts
+                            let mut chosen_node = NO_NODE;
+                            if stick_active {
+                                let angle = y.atan2(x);
+                                let player_n_id = usize::from(self.game_state.player_node_ids[player_id]);
+                                // find the target node for the new edge
+                                let mut smallest_diff: f32 = 1.5;  // the worst fit still needs to be better than this
+                                // go through all nodes and find those in range
+                                const NEW_EDGE_RANGE: f32 = 800.0;
+                                for (n_id, node) in self.physics_state.node_iter().enumerate() {
+                                    if n_id == player_n_id { continue; }
+                                    let vec = node.position - self.physics_state.node_at(player_n_id as NId).position;
+                                    // first check if it's in range
+                                    if vec.norm() <= NEW_EDGE_RANGE {
+                                        // then check if this edge already exists
+                                        if self.physics_state.neighbors(player_n_id as NId).find(|id| *id == n_id as NId).is_none() {
+                                            // calc the angle
+                                            let e_angle = vec.y.atan2(vec.x);
+                                            let diff = angle_diff_abs(e_angle, angle);
+                                            // check if it fits better than anything found until now
+                                            if diff < smallest_diff {
+                                                smallest_diff = diff;
+                                                chosen_node = n_id as NId;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            self.game_state.player_new_edge_n_ids[player_id] = if chosen_node == NO_NODE {
+                                // reset the new edge selection (in other words set the new edge target back to None)
+                                None
+                            } else {
+                                // save the selection, so it can be added when 'A' is released
+                                Some(chosen_node)
+                            }
+                        }
                     }
-                }
-                self.game_state.player_new_edge_n_ids[player_id] = if chosen_node == NO_NODE {
-                    // reset the new edge selection (in other words set the new edge target back to None)
-                    None
-                } else {
-                    // save the selection, so it can be added when 'A' is released
-                    println!("chose node {}", chosen_node);
-                    Some(chosen_node)
                 }
             }
             else if stick_active && player.try_left_axis_cooldown(dt) {
@@ -541,7 +575,7 @@ impl event::EventHandler for MainState {
                 // TODO: instead of using scale here better use some prepared sprites
                 let scale = match self.game_state.nodes[usize::from(i)].cell_type() {
                     CellType::Cancer => Vector2::new(1.65, 1.65),
-                    CellType::Propulsion => Vector2::new(1.65, 1.65),
+                    CellType::Propulsion(_,_) => Vector2::new(1.65, 1.65),
                     _ => Vector2::new(1.55, 1.55),
                 };
                 let p = self.draw_param_node(i as NId, ctx)
@@ -572,15 +606,11 @@ impl event::EventHandler for MainState {
                 Units => {
                     let unit_count_string = g_node.troop_of_player(ctrl).unwrap().count.to_string();
                     self.spr_b_text.add(unit_count_string.as_str(),
-                                        DrawParam::default().dest(node.position).scale(Vector2::new(4.0, 4.0)).offset(Point2::new(0.5, 0.5)).color(WHITE));
-                    //Self::set_unit_count_text(&mut self.unit_count_texts, i, unit_count_string);
-                    //graphics::queue_text(ctx, &self.unit_count_texts[i], node.position, Some(WHITE));
+                                        DrawParam::default().dest(node.position).scale(Vector2::new(3.0, 3.0)).offset(Point2::new(0.5, 0.5)).color(WHITE));
                 },
                 DesiredCount => {
                     self.spr_b_text.add(g_node.desired_unit_count().to_string().as_str(),
-                                        DrawParam::default().dest(node.position).scale(Vector2::new(4.0, 4.0)).offset(Point2::new(0.5, 0.5)).color(BLACK));
-                    //Self::set_unit_count_text(&mut self.unit_count_texts, i, g_node.desired_unit_count().to_string());
-                    //graphics::queue_text(ctx, &self.unit_count_texts[i], node.position, Some(BLACK));
+                                        DrawParam::default().dest(node.position).scale(Vector2::new(3.0, 3.0)).offset(Point2::new(0.5, 0.5)).color(BLACK));
                 },
             }
         }
@@ -673,7 +703,7 @@ impl event::EventHandler for MainState {
             // "D_PAD_LEFT":  transform cell into propulsion cell
             DPadLeft => {
                 let game_node = self.game_state.player_node_mut(player_id);
-                game_node.try_start_mutation(CellType::Propulsion);
+                game_node.try_start_mutation(CellType::Propulsion(0.0,0.0));
             }
             // "Select": change unit count draw mode
             Select => {

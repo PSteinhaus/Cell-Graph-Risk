@@ -66,14 +66,9 @@ impl MainState {
 
         let c_type = g_node.cell_type();
         p.src = self.draw_source_rect(&c_type);
-        /*
-        p.scale = match c_type {
-            Cancer => mVector2::from([1.25f32, 1.25f32]),
-            Propulsion => mVector2::from([1.25f32, 1.25f32]),
-            Wall => mVector2::from([1.0f32, 1.0f32]),
-            _ => mVector2::from([1.0f32, 1.0f32]),
-        };
-        */
+        if let CellType::Propulsion(_,angle) = c_type {
+            p.rotation = *angle;
+        }
         p
     }
 
@@ -85,7 +80,7 @@ impl MainState {
         use CellType::*;
         let native_rect = match cell_type {
             Cancer => Rect::new(1.0, 1.0, 140.0, 140.0),
-            Propulsion => Rect::new(143.0, 1.0, 140.0, 140.0),
+            Propulsion(_,_) => Rect::new(143.0, 1.0, 140.0, 140.0),
             Wall => Rect::new(285.0, 1.0, 140.0, 140.0),
             _ => Rect::new(427.0, 1.0, 124.0, 124.0),
         };
