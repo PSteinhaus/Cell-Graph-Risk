@@ -1,6 +1,9 @@
 use ggez::nalgebra::{Point2, Vector2, distance, norm};
 use crate::{ NId, EId };
 use std::slice::{Iter, IterMut};
+use crate::helpers::intersect;
+use smallvec::SmallVec;
+use crate::game_mechanics::GameState;
 
 const SPRING_CONST: f32 = 2.0;
 const NODE_MASS: f32 = 20.0;    // constant for now
@@ -146,6 +149,44 @@ impl PhysicsState {
             }
         }
     }
+    pub fn turn_to_wall(&mut self, e_id: EId, edges_to_remove: &mut Vec<EId>) -> bool {
+        let edge = &self.edges[usize::from(e_id)];
+        let mut e_to_rem = SmallVec::<[EId; 32]>::new();
+        // cut all edges intersecting this one
+        let node0 = &self.nodes[usize::from(edge.node_indices[0])];
+        let node1 = &self.nodes[usize::from(edge.node_indices[1])];
+        let start   = node0.position;
+        let end     = node1.position;
+        let mut failure = false;
+        for (other_e_id, other_edge) in self.edges.iter().enumerate() {
+            let other_e_id = other_e_id as EId;
+            // but don't cut any edges that are direct edges of one of the two nodes
+            if node0.edge_indices.contains(&other_e_id) || node1.edge_indices.contains((&other_e_id)) {
+                continue;
+            }
+            // check whether this new wall would intersect any existing walls
+            // if true then this cannot be turned into a wall
+            let start2  = self.node_at(other_edge.node_indices[0]).position;
+            let end2    = self.node_at(other_edge.node_indices[1]).position;
+            if intersect(start, end, start2, end2) {
+                if let EdgeType::Wall(_) = other_edge.e_type {
+                    failure = true;
+                    break;
+                } else {
+                    e_to_rem.push(other_e_id);
+                }
+            }
+        }
+        if failure {
+            return false;
+        } else {
+            self.edges[usize::from(e_id)].e_type = EdgeType::Wall(vec![]);
+            for o_e_id in e_to_rem {
+                edges_to_remove.push(o_e_id);
+            }
+            true
+        }
+    }
     /// advance the simulation dt seconds
     pub fn simulate_step(&mut self, dt: f32) {
         let combined_factor = dt * SPRING_CONST / NODE_MASS;
@@ -246,14 +287,14 @@ impl Node {
     }
 }
 
-enum EdgeType {
+pub enum EdgeType {
     Normal,
     Wall(Vec<NId>), // the Vec holds the trespassing nodes
 }
 
 pub struct Edge {
     relaxed_length: f32,
-    e_type: EdgeType,
+    pub(crate) e_type: EdgeType,
     pub(crate) node_indices: [NId; 2],  // the node for which the force is computed (the other needs to change the signs of it)
     pub(crate) velocity_change: Vector2<f32>, // velocity_change = difference_from_relaxed * spring_constant * dt / mass = F_spring/mass * dt = dv
 }
@@ -282,9 +323,6 @@ impl Edge {
     }
     pub fn contains_node(&self, n_id: NId) -> bool {
         n_id == self.node_indices[0] || n_id == self.node_indices[1]
-    }
-    pub fn turn_to_wall(&mut self) {
-        self.e_type = EdgeType::Wall(vec![]);
     }
     pub fn turn_to_normal(&mut self) {
         self.e_type = EdgeType::Normal;

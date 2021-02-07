@@ -141,7 +141,9 @@ impl MainState {
             let is_wall = g_state.add_edge(&[node1_index, node2_index]);
             // if it's a wall update the physics state
             if is_wall {
-                p_state.edge_at_mut(p_state.edge_count() as EId - 1).turn_to_wall();
+                let mut edges_to_remove = Vec::<EId>::new();
+                p_state.turn_to_wall(p_state.edge_count() as EId - 1, &mut edges_to_remove);
+                Self::remove_multiple_edges_static(p_state, g_state, &mut edges_to_remove);
             }
             return true;
         }
@@ -149,12 +151,37 @@ impl MainState {
     }
 
     fn remove_edge(&mut self, edge_index: EId) {
+        Self::remove_edge_static(&mut self.physics_state, &mut self.game_state, edge_index);
+    }
+
+    fn remove_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, edge_index: EId) {
         // get the nodes connected by this edge
-        let n_ids = self.physics_state.edge_at(edge_index).node_indices;
+        let n_ids = p_state.edge_at(edge_index).node_indices;
         // remove from game state
-        self.game_state.remove_edge(edge_index, n_ids);
+        g_state.remove_edge(edge_index, n_ids);
         // remove from physics
-        self.physics_state.remove_edge(edge_index);
+        p_state.remove_edge(edge_index);
+    }
+
+    fn remove_multiple_edges_static(p_state: &mut PhysicsState, g_state: &mut GameState, edges_to_remove: &mut Vec<EId>) {
+        // here we need to use some caution
+        // removing an edge will invalidate the EId of the last edge
+        // therefore we need to check whether the last edge is contained in this collection
+        // and update the EId if true
+        while !edges_to_remove.is_empty() {
+            // first check whether the list contains the last EId
+            let first_e_id = *edges_to_remove.last().unwrap();
+            let last_e_id = p_state.edge_count() as EId - 1;
+            for e_id in edges_to_remove.iter_mut() {
+                if *e_id == last_e_id {
+                    // update it to the value it will have after the removal of the first edge
+                    *e_id = first_e_id;
+                    break;
+                }
+            }
+            Self::remove_edge_static(p_state, g_state, first_e_id);
+            edges_to_remove.pop();
+        }
     }
 
     fn player_id_using(&self, gamepad_id: GamepadId) -> PlayerId {
@@ -517,7 +544,12 @@ impl event::EventHandler for MainState {
             let ratio = (DESIRED_DELTA / secs) * thread_rng().gen_range(0.997, 1.003);
             let dur = ratio * secs;
             // update the game state
-            let players_to_be_removed = self.game_state.update(&mut self.physics_state, dur, &mut self.proximity_nodes);
+            let mut edges_to_be_removed = Vec::<EId>::new();
+            let players_to_be_removed = self.game_state.update(&mut self.physics_state,
+                                                               dur,
+                                                               &mut self.proximity_nodes,
+                                                               &mut edges_to_be_removed);
+            Self::remove_multiple_edges_static(&mut self.physics_state, &mut self.game_state, &mut edges_to_be_removed);
             for player in players_to_be_removed.into_iter() {
                 self.remove_player(player);
             }

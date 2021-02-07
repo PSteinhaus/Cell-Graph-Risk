@@ -134,7 +134,7 @@ impl GameState {
         self.player_node_ids.swap_remove(usize::from(p_id));
         self.player_edge_ids.swap_remove(usize::from(p_id));
         // now do housekeeping
-        // TODO: remove all his units (and thereby turn all his nodes and edges into uncontrolled territory)
+        // TODO: remove all his units (also the travelling ones) (and thereby turn all his nodes and edges into uncontrolled territory)
 
     }
 
@@ -187,6 +187,8 @@ impl GameState {
             }
             // if this fails as well then the player has lost (and is removed from the game for now)
             if searching_node {
+                // TODO: maybe check whether the player still has some travelling units left and keep him if he has
+                // if we choose to do that though, we need to change the program to respect that there can be players without a node
                 return true;
             }
         }
@@ -217,7 +219,7 @@ impl GameState {
         return players_to_be_removed;
     }
     /// Returns players who have to be removed.
-    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>) -> SmallVec<[PlayerId; 4]> {
+    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, e_to_b_rem: &mut Vec<EId>) -> SmallVec<[PlayerId; 4]> {
         // update all nodes
         let distribute_troops   = self.check_for_troop_distribution(dt);
         let production_producer = self.check_for_unit_production_producer(dt);
@@ -239,7 +241,7 @@ impl GameState {
             }
 
             // then check for mutations and advance them
-            if node.advance_mutation(physics_state, dt, n_id as NId, unsafe {&*nodes_ptr}) {
+            if node.advance_mutation(physics_state, dt, n_id as NId, unsafe {&*nodes_ptr}, e_to_b_rem) {
                 control_changed_nodes.push(n_id as NId);
             }
 
@@ -520,7 +522,7 @@ impl GameNode {
     }
 
     /// Returns whether a control change has happened in this node
-    fn advance_mutation(&mut self, physics_state: &mut PhysicsState, dt: f32, n_id: NId, g_nodes: &[GameNode]) -> bool {
+    fn advance_mutation(&mut self, physics_state: &mut PhysicsState, dt: f32, n_id: NId, g_nodes: &[GameNode], e_to_b_rem: &mut Vec<EId>) -> bool {
         if let Some((c_type, duration_left)) = &mut self.mutating {
             *duration_left -= dt;
             if *duration_left <= 0. {
@@ -547,15 +549,17 @@ impl GameNode {
                     }
                     Wall => {
                         // check whether edges have to be turned into walls now
-                        for edge in physics_state.edges_of_node(n_id) {
-                            unsafe {
-                                let edge = &mut*edge;
-                                let other_n_id = edge.other_node(n_id);
-                                if let Wall = g_nodes[usize::from(other_n_id)].cell_type() {
-                                    // both cells are wall cells, so the edge between them has to become a wall
-                                    edge.turn_to_wall();
-                                }
+                        let mut edges_to_turn_to_walls = SmallVec::<[EId; 8]>::new();
+                        for e_id in physics_state.node_at(n_id as NId).edge_indices.iter() {
+                            let edge = physics_state.edge_at(*e_id);
+                            let other_n_id = edge.other_node(n_id);
+                            if let Wall = g_nodes[usize::from(other_n_id)].cell_type() {
+                                // both cells are wall cells, so the edge between them has to become a wall
+                                edges_to_turn_to_walls.push(*e_id);
                             }
+                        }
+                        for e_id in edges_to_turn_to_walls {
+                            physics_state.turn_to_wall(e_id, e_to_b_rem);
                         }
                     }
                     _ => {}

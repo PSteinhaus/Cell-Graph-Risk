@@ -10,7 +10,7 @@ use crate::{ANYONE_PLAYER, CANCER_PLAYER, MainState, NId, NO_PLAYER, PlayerId, P
 use crate::game_mechanics::{CellType, GameEdge, GameNode};
 use crate::game_mechanics::fighting::Troop;
 use crate::helpers::lerp_colors;
-use crate::physics::{Edge, PhysicsState};
+use crate::physics::{Edge, PhysicsState, Node, EdgeType};
 
 impl MainState {
     pub fn battle_color<'a, I: Iterator<Item = &'a Troop>>(&self, ctx: &Context, troop_iter: I) -> Color {
@@ -95,11 +95,12 @@ impl MainState {
 
     pub fn draw_param_edge_from_n_ids(&self, n_ids: [NId; 2], p_id_controlling: PlayerId) -> DrawParam {
         let (node1, node2) = (self.physics_state.node_at(n_ids[0]), self.physics_state.node_at(n_ids[1]));
-        let (g_node1, g_node2) = (&self.game_state.nodes[usize::from(n_ids[0])], &self.game_state.nodes[usize::from(n_ids[1])]);
+        let e_id = self.physics_state.edge_id_between(n_ids[0], n_ids[1]).unwrap();
+        let edge = self.physics_state.edge_at(e_id);
         let vec: Vector2<f32> = node2.position - node1.position;
 
         Self::draw_param_edge_static(
-            g_node1, g_node2,
+            edge,
             node1.position,
             vec,
             self.edge_sprite_width,
@@ -108,20 +109,19 @@ impl MainState {
         )
     }
 
-    pub fn draw_param_edge_static(g_node1: &GameNode, g_node2: &GameNode, pos: Point2<f32>, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState]) -> DrawParam {
+    pub fn draw_param_edge_static(p_edge: &Edge, pos: Point2<f32>, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState]) -> DrawParam {
         let rotation = ggez::nalgebra::RealField::atan2(vec.y, vec.x);
         DrawParam::new()
             .offset(Point2::new(0.0, 0.5))
-            .src(Self::edge_src_rect(g_node1, g_node2))
+            .src(Self::edge_src_rect(p_edge))
             .dest(Point2::new(pos.x, pos.y))
             .rotation(rotation)
             .scale(Vector2::new(vec.norm() / spr_width, 1.0))
             .color(Self::player_color_static(p_id_controlling, players))
     }
 
-    pub fn edge_src_rect(g_node1: &GameNode, g_node2: &GameNode) -> Rect {
-        use CellType::*;
-        return if let (Wall, Wall) = (g_node1.cell_type(), g_node2.cell_type()) {
+    pub fn edge_src_rect(p_edge: &Edge) -> Rect {
+        return if let EdgeType::Wall(_) = p_edge.e_type {
             Self::edge_src_rect_bg()
         } else {
             Self::edge_src_rect_main()
@@ -148,11 +148,10 @@ impl MainState {
                  spr_b_node_dim: (u16, u16))
     {
         let (node1, node2) = (physics_state.node_at(edge.node_indices[0]),physics_state.node_at(edge.node_indices[1]));
-        let (g_node1, g_node2) = (&g_nodes[usize::from(edge.node_indices[0])], &g_nodes[usize::from(edge.node_indices[1])]);
         let vec: Vector2<f32> = node2.position - node1.position;
         // draw the edge
         spr_batch_edge.add(Self::draw_param_edge_static(
-            g_node1, g_node2,
+            edge,
             node1.position,
             vec,
             spr_width,
