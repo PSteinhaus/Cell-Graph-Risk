@@ -1,5 +1,4 @@
 use std::f32::consts::PI;
-use std::cmp::min;
 use ggez::input::gamepad::gilrs::Button;
 use std::mem::transmute;
 use ggez::graphics::Color;

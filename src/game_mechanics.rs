@@ -1,18 +1,11 @@
-use core::slice::IterMut;
-use std::cmp::Ordering;
 use std::collections::BTreeSet;
-use std::slice::Iter;
 
-use ggez::Context;
-use ggez::graphics::Color;
 use ggez::nalgebra::clamp;
-use rand::{Rng, thread_rng};
-use rand::seq::{IteratorRandom, SliceRandom};
-use smallvec::{SmallVec, smallvec};
+use smallvec::{SmallVec};
 
-use fighting::{AdvancingTroop, EdgeFight, EdgeTroopIter, Fight, Troop};
+use fighting::{AdvancingTroop, EdgeFight, Fight, Troop};
 
-use crate::{ANYONE_PLAYER, CANCER_PLAYER, EId, MainState, MAX_UNIT_COUNT, NId, NO_EDGE, NO_PLAYER, PlayerId, UnitCount};
+use crate::{ANYONE_PLAYER, CANCER_PLAYER, EId, MainState, MAX_UNIT_COUNT, NId, NO_PLAYER, PlayerId, UnitCount};
 use crate::game_mechanics::CellType::Basic;
 use crate::helpers::*;
 use crate::physics::PhysicsState;
@@ -77,7 +70,7 @@ impl GameState {
     pub fn add_node(&mut self, cell_type: CellType) {
         self.nodes.push(GameNode::with_type(cell_type));
     }
-    pub fn add_edge(&mut self, n_ids: &[NId; 2]) {
+    pub fn add_edge(&mut self, n_ids: &[NId; 2]) -> bool {
         let mut edge = GameEdge::new();
         let g_nodes: SmallVec<[&GameNode; 2]> = n_ids.iter().map(|n_id| &self.nodes[usize::from(*n_id)]).collect();
         let cell_types: SmallVec<[CellType; 2]> = g_nodes.iter().map(|g_n| g_n.cell_type).collect();
@@ -88,15 +81,23 @@ impl GameState {
 
         // check if this edge contains a cancer cell or a producer
         self.edges.push(edge);
+        let mut is_wall = true;
         for i in 0..2 {
             use CellType::*;
-            if let Producer | Cancer = cell_types[i] {
-                // if so, try to add this new edge to its list of troop distribution targets
-                let node = &mut self.nodes[usize::from(n_ids[i])];
-                let e_id = (self.edges.len() - 1) as EId;
-                Self::add_troop_path_static(e_id, node, cell_types[1 - i]);
+            match cell_types[i] {
+                Producer | Cancer => {
+                    // if so, try to add this new edge to its list of troop distribution targets
+                    let node = &mut self.nodes[usize::from(n_ids[i])];
+                    let e_id = (self.edges.len() - 1) as EId;
+                    Self::add_troop_path_static(e_id, node, cell_types[1 - i]);
+
+                    is_wall = false;
+                },
+                Wall => {},
+                _ => { is_wall = false; }
             }
         }
+        is_wall
     }
     pub fn remove_node(&mut self, node_index: NId) {
         // remove the game node from the collection
@@ -227,7 +228,6 @@ impl GameState {
         // I need to check different nodes at the same time, so I need a raw pointer to go around Rusts safety checks
         let nodes_ptr: *const Vec<GameNode> = &self.nodes;
         use CellType::*;
-        use fighting::Troop;
         for (n_id, node) in self.nodes.iter_mut().enumerate() {
             // first manage possible fights
             if node.fighting() {
@@ -239,30 +239,8 @@ impl GameState {
             }
 
             // then check for mutations and advance them
-            if let Some((c_type, duration_left)) = &mut node.mutating {
-                *duration_left -= dt;
-                if *duration_left <= 0. {
-                    node.cell_type = *c_type;
-                    node.mutating = None;
-                    // depending on the type of mutation do some additional things:
-                    match node.cell_type {
-                        Cancer => {
-                            // take over all units on this node and thereby trigger a control change
-                            let mut stolen_units: UnitCount = 0;
-                            for troop in node.troops.iter() {
-                                stolen_units += troop.count;
-                            }
-                            node.troops.clear();
-                            node.add_units(CANCER_PLAYER, stolen_units);
-                            // add all edges to the send paths list
-                            for e_id in physics_state.node_at(n_id as NId).edge_indices.iter() {
-                                node.add_troop_path(*e_id);
-                            }
-                            control_changed_nodes.push(n_id as NId);
-                        }
-                        _ => {}
-                    }
-                }
+            if node.advance_mutation(physics_state, dt, n_id as NId, unsafe {&*nodes_ptr}) {
+                control_changed_nodes.push(n_id as NId);
             }
 
             // if this cell is owned by the cancer player but not a cancer cell check whether you can turn it into one and do so if you can
@@ -275,6 +253,7 @@ impl GameState {
                 }
             }
 
+            // manage special cell type behavior
             match node.cell_type() {
                 Producer => {
                     if production_producer { node.add_units(ANYONE_PLAYER, 1); }
@@ -315,7 +294,7 @@ impl GameState {
                 if can_distribute {
                     if let Some(troop) = Troop::troop_of_player_mut(&mut node.troops, node.controlled_by) {
                         if let Some(available_units) = troop.count.checked_sub(node.desired_unit_count) {
-                            let mut units_to_distribute = clamp(1, 0, available_units);
+                            let units_to_distribute = clamp(1, 0, available_units);
                             if units_to_distribute != 0 {
                                 troop.remove_units(units_to_distribute);
                                 let mut possible_e_ids: SmallVec<[EId; 16]> = /* match node.cell_type {
@@ -430,7 +409,7 @@ impl GameEdge {
         if self.controlled_by == CANCER_PLAYER {
             20
         } else {
-            200
+            99
         }
     }
     fn addable_unit_count(&self) -> UnitCount { self.max_unit_count().saturating_sub(self.unit_count()) }
@@ -536,6 +515,62 @@ impl GameNode {
         if self.can_mutate(&cell_type) {
             self.start_mutation(cell_type);
             return true;
+        }
+        false
+    }
+
+    /// Returns whether a control change has happened in this node
+    fn advance_mutation(&mut self, physics_state: &mut PhysicsState, dt: f32, n_id: NId, g_nodes: &[GameNode]) -> bool {
+        if let Some((c_type, duration_left)) = &mut self.mutating {
+            *duration_left -= dt;
+            if *duration_left <= 0. {
+                // finish the mutation
+                let old_type = self.cell_type;
+                self.cell_type = *c_type;
+                self.mutating = None;
+                // depending on the type of mutation do some additional things:
+                use CellType::*;
+                match self.cell_type {
+                    Cancer => {
+                        // take over all units on this node and thereby trigger a control change
+                        let mut stolen_units: UnitCount = 0;
+                        for troop in self.troops.iter() {
+                            stolen_units += troop.count;
+                        }
+                        self.troops.clear();
+                        self.add_units(CANCER_PLAYER, stolen_units);
+                        // add all edges to the send paths list
+                        for e_id in physics_state.node_at(n_id as NId).edge_indices.iter() {
+                            self.add_troop_path(*e_id);
+                        }
+                        return true;
+                    }
+                    Wall => {
+                        // check whether edges have to be turned into walls now
+                        for edge in physics_state.edges_of_node(n_id) {
+                            unsafe {
+                                let edge = &mut*edge;
+                                let other_n_id = edge.other_node(n_id);
+                                if let Wall = g_nodes[usize::from(other_n_id)].cell_type() {
+                                    // both cells are wall cells, so the edge between them has to become a wall
+                                    edge.turn_to_wall();
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                // if the old state was "Wall" then update the physical wall state of all edges as well
+                if let Wall = old_type {
+                    // turn all edges back to normal
+                    for edge in physics_state.edges_of_node(n_id) {
+                        unsafe {
+                            let edge = &mut *edge;
+                            edge.turn_to_normal();
+                        }
+                    }
+                }
+            }
         }
         false
     }

@@ -49,11 +49,11 @@ impl<'a> Fight {
     pub(crate) fn winner<I: Iterator<Item = &'a Troop>>(mut troop_iter: I) -> Option<&'a Troop> {
         // if only one is standing return this troop
         let first_troop_alive = troop_iter.find(|troop| troop.count != 0).unwrap();
-        if let Some(_other_troop) = troop_iter.find(|troop| troop.count != 0) {
-            return None;
+        return if let Some(_other_troop) = troop_iter.find(|troop| troop.count != 0) {
+            None
         } else {
-            return Some(first_troop_alive);
-        }
+            Some(first_troop_alive)
+        };
     }
 }
 
@@ -439,13 +439,13 @@ impl GameEdge {
                 }
                 return false;
             }
-            //else if fight_happened {
-            else if let Some((st_index, troop)) = fight.winner(dt) {
-                units_to_add.push((st_index, troop, fight.advancement));
-                return false;
+            else if fight_happened {
+                if let Some((st_index, troop)) = fight.winner(dt) {
+                    units_to_add.push((st_index, troop, fight.advancement));
+                    return false;
+                }
+                return true;
             }
-            //return true;
-            //}
             else { true }
         });
         for w in units_to_add {

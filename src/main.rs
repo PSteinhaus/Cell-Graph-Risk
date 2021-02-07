@@ -1,28 +1,26 @@
 #![feature(drain_filter)]
 #![feature(destructuring_assignment)]
+#![feature(in_band_lifetimes)]
 
 use ggez;
 use ggez::{event, conf};
 use ggez::graphics;
-use ggez::mint::{Vector2 as mVector2};
-use ggez::nalgebra::{Point2, Vector2, clamp, partial_clamp};
-use ggez::nalgebra as na;
+use ggez::nalgebra::{Point2, Vector2};
 use ggez::timer;
 use ggez::{Context, GameResult};
 use std::env;
 use std::path;
-use crate::physics::{PhysicsState, Node, Edge};
+use crate::physics::{PhysicsState, Node};
 use crate::game_mechanics::*;
 use rand::{Rng, thread_rng};
-use ggez::graphics::{Rect, DrawMode, Image, DrawParam, Drawable, Color, WHITE, BLACK, Text, TextFragment, FilterMode, Scale};
+use ggez::graphics::{Rect, Image, DrawParam, Color, WHITE, BLACK};
 use ggez::graphics::spritebatch::SpriteBatch;
-use ggez::input::gamepad::{GamepadId, gamepad, Gamepad};
+use ggez::input::gamepad::{GamepadId, gamepad};
 use ggez::event::{Button, Axis};
-use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16, lerp_colors};
+use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16};
 use ggez::input::gamepad::gilrs::ev::Button::South;
 use smallvec::{SmallVec, smallvec};
 use std::mem::transmute;
-use std::cmp::{max, min};
 use crate::text::SpriteText;
 
 mod physics;
@@ -140,7 +138,11 @@ impl MainState {
             // add to physics
             p_state.add_edge(node1_index, node2_index);
             // add to game state
-            g_state.add_edge(&[node1_index, node2_index]);
+            let is_wall = g_state.add_edge(&[node1_index, node2_index]);
+            // if it's a wall update the physics state
+            if is_wall {
+                p_state.edge_at_mut(p_state.edge_count() as EId - 1).turn_to_wall();
+            }
             return true;
         }
         return false;
@@ -370,7 +372,6 @@ impl MainState {
                 let p_node = self.physics_state.node_at(p_node_id);
                 // go through all edges of the node and find the edge and associated neighbor node closest to the chosen angle
                 let mut smallest_diff: f32 = 1.5;  // the worst fit still needs to be better than this
-                let mut chosen_node = NO_NODE;
                 let mut chosen_edge = NO_EDGE;
                 for e_id in p_node.edge_indices.iter() {
                     let vec = self.physics_state.edge_vec_2d(*e_id, p_node_id);
@@ -378,7 +379,6 @@ impl MainState {
                     let difference = angle_diff_abs(edge_angle, angle);
                     if difference < smallest_diff {
                         smallest_diff = difference;
-                        chosen_node = self.physics_state.edge_at(*e_id).other_node(p_node_id);
                         chosen_edge = *e_id;
                     }
                 }

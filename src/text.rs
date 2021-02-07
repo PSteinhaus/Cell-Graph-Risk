@@ -1,5 +1,5 @@
 use ggez::graphics::spritebatch::SpriteBatch;
-use ggez::graphics::{Image, DrawParam, Rect, mint, Drawable, BlendMode};
+use ggez::graphics::{Image, DrawParam, Rect, Drawable, BlendMode};
 use smallvec::SmallVec;
 use ggez::mint::{Vector4, Point2};
 use ggez::{Context, GameResult};

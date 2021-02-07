@@ -1,6 +1,5 @@
 use crate::{MainState, NId};
 use ggez::{Context, timer};
-use std::cmp::min;
 
 pub fn proximity_nodes(prox_nodes: &Vec<Vec<NId>>, n_id: NId) -> &[NId] {
     &prox_nodes[usize::from(n_id)]

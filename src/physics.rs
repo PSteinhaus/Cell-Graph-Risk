@@ -1,5 +1,4 @@
-use ggez::nalgebra::{Point2, Vector2, distance, norm, normalize};
-use ggez::graphics::DrawParam;
+use ggez::nalgebra::{Point2, Vector2, distance, norm};
 use crate::{ NId, EId };
 use std::slice::{Iter, IterMut};
 
@@ -83,6 +82,10 @@ impl PhysicsState {
     }
     pub fn neighbors(&self, n_id: NId) -> NeighborNodeIterator {
         NeighborNodeIterator::new(n_id, &self.nodes[usize::from(n_id)], &self.edges)
+    }
+    pub fn edges_of_node(&'a mut self, n_id: NId) -> impl Iterator<Item=*mut Edge> + 'a {
+        let e_ref: &'a mut Vec<Edge> = &mut self.edges;
+        self.nodes[usize::from(n_id)].edge_indices.iter().map(move |e_id| &mut e_ref[usize::from(*e_id)] as *mut Edge)
     }
     pub fn can_add_edge(&self, node1_index: NId, node2_index: NId) -> bool {
         // check if such an edge already exists and whether the two nodes given are actually two different nodes
@@ -243,10 +246,16 @@ impl Node {
     }
 }
 
+enum EdgeType {
+    Normal,
+    Wall(Vec<NId>), // the Vec holds the trespassing nodes
+}
+
 pub struct Edge {
     relaxed_length: f32,
-    pub(crate)node_indices: [NId; 2],  // the node for which the force is computed (the other needs to change the signs of it)
-    pub(crate)velocity_change: Vector2<f32>, // velocity_change = difference_from_relaxed * spring_constant * dt / mass = F_spring/mass * dt = dv
+    e_type: EdgeType,
+    pub(crate) node_indices: [NId; 2],  // the node for which the force is computed (the other needs to change the signs of it)
+    pub(crate) velocity_change: Vector2<f32>, // velocity_change = difference_from_relaxed * spring_constant * dt / mass = F_spring/mass * dt = dv
 }
 
 impl PartialEq for Edge {
@@ -257,9 +266,9 @@ impl PartialEq for Edge {
 
 impl Edge {
     fn new(relaxed_length: f32, node1_index: NId, node2_index: NId) -> Edge {
-        const STRETCH_FACTOR: f32 = (4.0/3.0);
         Edge {
             relaxed_length,
+            e_type: EdgeType::Normal,
             node_indices: [node1_index, node2_index],
             velocity_change: Vector2::new(0.0, 0.0),
         }
@@ -273,6 +282,12 @@ impl Edge {
     }
     pub fn contains_node(&self, n_id: NId) -> bool {
         n_id == self.node_indices[0] || n_id == self.node_indices[1]
+    }
+    pub fn turn_to_wall(&mut self) {
+        self.e_type = EdgeType::Wall(vec![]);
+    }
+    pub fn turn_to_normal(&mut self) {
+        self.e_type = EdgeType::Normal;
     }
     pub fn shorten(&mut self, amount: f32) {
         const MIN_LENGTH: f32 = 150.0;
