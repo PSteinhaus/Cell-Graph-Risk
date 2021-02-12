@@ -62,7 +62,7 @@ pub fn u16_to_btn(u: u16) -> Option<Button> {
 // 0 --> p, q and r are colinear
 // 1 --> Clockwise
 // 2 --> Counterclockwise
-fn orientation(p: Point2<f32>, q: Point2<f32>, r: Point2<f32>) -> i32
+pub fn orientation(p: Point2<f32>, q: Point2<f32>, r: Point2<f32>) -> i32
 {
     // See https://www.geeksforgeeks.org/orientation-3-ordered-points/
     // for details of below formula.

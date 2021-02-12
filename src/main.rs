@@ -47,6 +47,7 @@ struct MainState {
     game_state: GameState,
     physics_state: PhysicsState,
     proximity_nodes: Vec<Vec<NId>>,
+    proximity_walls: Vec<Vec<EId>>,
     edge_sprite_width: f32,
     spr_b_node_dim: (u16, u16),
     spr_b_node: SpriteBatch,
@@ -64,6 +65,7 @@ impl MainState {
             game_state: GameState::new(),
             physics_state: PhysicsState::new(),
             proximity_nodes: Vec::new(),
+            proximity_walls: Vec::new(),
             edge_sprite_width: img.width() as f32,
             spr_b_node_dim: (spr_sheet.width(), spr_sheet.height()),
             spr_b_node: SpriteBatch::new(spr_sheet),
@@ -81,8 +83,9 @@ impl MainState {
         self.physics_state.add_node(position);
         // add to game state
         self.game_state.add_node(cell_type);
-        // reserve a vector for the proximity state
+        // reserve two vectors for the proximity state
         self.proximity_nodes.push(Vec::new());
+        self.proximity_walls.push(Vec::new());
 
         // reserve a text for unit count
         //let txt_fragm = TextFragment::new("42").scale(Scale::uniform(200.0));
@@ -110,6 +113,7 @@ impl MainState {
         }
         // remove it from the proximity state
         self.proximity_nodes.swap_remove(usize::from(node_index));
+        self.proximity_walls.swap_remove(usize::from(node_index));
         // remove from game state
         self.game_state.remove_node(node_index);
         // remove it from physics
@@ -129,10 +133,10 @@ impl MainState {
     }
 
     fn add_edge(&mut self, node1_index: NId, node2_index: NId) -> bool {
-        Self::add_edge_static(&mut self.physics_state, &mut self.game_state, node1_index, node2_index)
+        Self::add_edge_static(&mut self.physics_state, &mut self.game_state, node1_index, node2_index, &mut self.proximity_walls)
     }
 
-    fn add_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, node1_index: NId, node2_index: NId) -> bool {
+    fn add_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, node1_index: NId, node2_index: NId, prox_walls: &mut Vec<Vec<EId>>) -> bool {
         // first check if you can add this edge
         if p_state.can_add_edge(node1_index, node2_index) {
             // add to physics
@@ -143,7 +147,7 @@ impl MainState {
             if is_wall {
                 let mut edges_to_remove = Vec::<EId>::new();
                 p_state.turn_to_wall(p_state.edge_count() as EId - 1, &mut edges_to_remove);
-                Self::remove_multiple_edges_static(p_state, g_state, &mut edges_to_remove);
+                Self::remove_multiple_edges_static(p_state, g_state, &mut edges_to_remove, prox_walls);
             }
             return true;
         }
@@ -151,19 +155,32 @@ impl MainState {
     }
 
     fn remove_edge(&mut self, edge_index: EId) {
-        Self::remove_edge_static(&mut self.physics_state, &mut self.game_state, edge_index);
+        Self::remove_edge_static(&mut self.physics_state, &mut self.game_state, edge_index, &mut self.proximity_walls);
     }
 
-    fn remove_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, edge_index: EId) {
+    fn remove_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, edge_index: EId, prox_walls: &mut Vec<Vec<EId>>) {
         // get the nodes connected by this edge
         let n_ids = p_state.edge_at(edge_index).node_indices;
+        let last_e_id = (p_state.edge_count() - 1) as EId;
         // remove from game state
         g_state.remove_edge(edge_index, n_ids);
         // remove from physics
         p_state.remove_edge(edge_index);
+        // remove from the proximity state
+        for n_id in n_ids.iter() {
+            for vec in prox_walls.iter_mut() {
+                vec.retain(|e_id| *e_id != edge_index);
+                for e_id in vec.iter_mut() {
+                    if *e_id == last_e_id {
+                        *e_id = edge_index;
+                        break;
+                    }
+                }
+            }
+        }
     }
 
-    fn remove_multiple_edges_static(p_state: &mut PhysicsState, g_state: &mut GameState, edges_to_remove: &mut Vec<EId>) {
+    fn remove_multiple_edges_static(p_state: &mut PhysicsState, g_state: &mut GameState, edges_to_remove: &mut Vec<EId>, prox_walls: &mut Vec<Vec<EId>>) {
         // here we need to use some caution
         // removing an edge will invalidate the EId of the last edge
         // therefore we need to check whether the last edge is contained in this collection
@@ -179,7 +196,7 @@ impl MainState {
                     break;
                 }
             }
-            Self::remove_edge_static(p_state, g_state, first_e_id);
+            Self::remove_edge_static(p_state, g_state, first_e_id, prox_walls);
             edges_to_remove.pop();
         }
     }
@@ -438,7 +455,7 @@ impl MainState {
         }
     }
 
-    pub fn try_add_edge(g_state: &mut GameState, p_state: &mut PhysicsState, start_n_id: NId, target_n_id: NId) -> bool {
+    pub fn try_add_edge(g_state: &mut GameState, p_state: &mut PhysicsState, start_n_id: NId, target_n_id: NId, prox_walls: &mut Vec<Vec<EId>>) -> bool {
         const NEW_EDGE_UNIT_COST: UnitCount = 2;
         let game_node = &mut g_state.nodes[usize::from(start_n_id)];
         let ctrl = game_node.controlled_by();
@@ -448,7 +465,7 @@ impl MainState {
                 if troop.count > NEW_EDGE_UNIT_COST {
                     // pay the price and add the new edge
                     troop.remove_units(NEW_EDGE_UNIT_COST);
-                    return Self::add_edge_static(p_state, g_state,start_n_id, target_n_id);
+                    return Self::add_edge_static(p_state, g_state,start_n_id, target_n_id, prox_walls);
                 }
             }
         }
@@ -548,15 +565,16 @@ impl event::EventHandler for MainState {
             let players_to_be_removed = self.game_state.update(&mut self.physics_state,
                                                                dur,
                                                                &mut self.proximity_nodes,
+                                                               &mut self.proximity_walls,
                                                                &mut edges_to_be_removed);
-            Self::remove_multiple_edges_static(&mut self.physics_state, &mut self.game_state, &mut edges_to_be_removed);
+            Self::remove_multiple_edges_static(&mut self.physics_state, &mut self.game_state, &mut edges_to_be_removed, &mut self.proximity_walls);
             for player in players_to_be_removed.into_iter() {
                 self.remove_player(player);
             }
             // update the proximity state
             self.update_proximity_state(ctx);
             // update the physics simulation
-            self.physics_state.simulate_step(dur);
+            self.physics_state.simulate_step(dur, &self.proximity_walls);
         }
         // TODO: iterate over gamepads from time to time and check whether they're still connected;
         //       if not remove the player associated with the pad in question;
@@ -571,7 +589,14 @@ impl event::EventHandler for MainState {
         for (i, player) in self.players.iter().enumerate() {
             // if the player is currently adding a new edge draw it (lightly) instead of the actually selected edge
             if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[i] {
-                let mut p = self.draw_param_edge_from_n_ids([self.game_state.player_node_ids[i], target_n_id], i as PlayerId);
+                let start = self.physics_state.node_at(self.game_state.player_node_ids[i]).position;
+                let end = self.physics_state.node_at(target_n_id).position;
+                let vec = end - start;
+                let mut p = Self::draw_param_edge_without_edge_static(false,
+                                                                      start,
+                                                                      vec,
+                                                                      self.edge_sprite_width,
+                                                                      &player.color);
                 p.color.a = 0.5;    // draw it lightly
                 add_last.push(p);
             }
@@ -782,7 +807,7 @@ impl event::EventHandler for MainState {
                 if let Some(target_n_id) = self.game_state.player_new_edge_n_ids[usize::from(player_id)] {
                     // check if the player controls the node completely
                     let p_n_id = self.game_state.player_node_ids[usize::from(player_id)];
-                    Self::try_add_edge(&mut self.game_state, &mut self.physics_state, p_n_id, target_n_id);
+                    Self::try_add_edge(&mut self.game_state, &mut self.physics_state, p_n_id, target_n_id, &mut self.proximity_walls);
                 }
                 self.game_state.player_new_edge_n_ids[usize::from(player_id)] = None;
             }

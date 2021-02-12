@@ -1,7 +1,7 @@
 use ggez::nalgebra::{Point2, Vector2, distance, norm};
 use crate::{ NId, EId };
 use std::slice::{Iter, IterMut};
-use crate::helpers::intersect;
+use crate::helpers::{intersect, orientation};
 use smallvec::SmallVec;
 use crate::game_mechanics::GameState;
 
@@ -11,8 +11,8 @@ const NODE_FRICTION_FACTOR: f32 = 0.99;
 const TENSION_FACTOR: f32 = 0.75; // = relaxed_length / distance between nodes
 
 pub struct PhysicsState {
-    nodes: Vec<Node>,
-    edges: Vec<Edge>,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
 }
 
 impl PhysicsState {
@@ -46,10 +46,12 @@ impl PhysicsState {
         self.nodes.push(Node::new(position));
     }
     pub fn remove_node (&mut self, node_index: NId) {
-        // first remove all edges to this node
+        // first remove all edges to this node (no longer necessary because this is carried out earlier and more globally now)
+        /*
         while !self.node_at(node_index).edge_indices.is_empty() {
             self.remove_edge(*self.node_at(node_index).edge_indices.last().unwrap());
         }
+         */
         // then remove the node
         self.nodes.swap_remove(usize::from(node_index));
         // update the node index of all edges of the swapped node
@@ -112,28 +114,12 @@ impl PhysicsState {
     }
     pub fn remove_edge(&mut self, edge_index: EId) {
         // update the edge-index collection of the nodes connected by the edge
-        /*
-        let edge = &self.edges[usize::from(edge_index)];
-        for i in 0..2 {
-            let node_index = edge.node_indices[i];
-            self.nodes[usize::from(node_index)].remove_edge(edge_index);
-        }
-        */
         let (nodes, edges) = self.data_mut();
         let edge = &edges[usize::from(edge_index)];
         for i in 0..2 {
-                let node_index = edge.node_indices[i];
-                nodes[usize::from(node_index)].remove_edge(edge_index);   // second borrow here (safe though since remove_edge cannot invalidate the pointer)
+            let node_index = edge.node_indices[i];
+            nodes[usize::from(node_index)].remove_edge(edge_index);   // second borrow here (safe though since remove_edge cannot invalidate the pointer)
         }
-        /*
-        let edge: *const Edge = self.edge_at(edge_index);
-        for i in 0..2 {
-            unsafe {    // might seem unnecessary, but Rust doesn't allow this loop else, because the edge borrow has to stay
-                let node_index = (*edge).node_indices[i];
-                self.node_at_mut(node_index).remove_edge(edge_index);   // second borrow here (safe though since remove_edge cannot invalidate the pointer)
-            }
-        }
-        */
         // remove it from the collection
         self.edges.swap_remove(usize::from(edge_index));
         // if something else than the last edge was removed
@@ -161,7 +147,7 @@ impl PhysicsState {
         for (other_e_id, other_edge) in self.edges.iter().enumerate() {
             let other_e_id = other_e_id as EId;
             // but don't cut any edges that are direct edges of one of the two nodes
-            if node0.edge_indices.contains(&other_e_id) || node1.edge_indices.contains((&other_e_id)) {
+            if node0.edge_indices.contains(&other_e_id) || node1.edge_indices.contains(&other_e_id) {
                 continue;
             }
             // check whether this new wall would intersect any existing walls
@@ -182,23 +168,32 @@ impl PhysicsState {
         } else {
             self.edges[usize::from(e_id)].e_type = EdgeType::Wall(vec![]);
             for o_e_id in e_to_rem {
-                edges_to_remove.push(o_e_id);
+                if !edges_to_remove.contains(&o_e_id) {
+                    edges_to_remove.push(o_e_id);
+                }
             }
             true
         }
     }
     /// advance the simulation dt seconds
-    pub fn simulate_step(&mut self, dt: f32) {
+    pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<EId>>) {
         let combined_factor = dt * SPRING_CONST / NODE_MASS;
-        //let world = current_world();
         // calculate the node forces
         for edge in self.edges.iter_mut() {
-            edge.calc_force(&self.nodes, combined_factor);
+            edge.calc_force(&mut self.nodes, combined_factor);
         }
         // apply them to the nodes and actually move them
+        let nodes_prt = &self.nodes as *const Vec<Node>;
         for (i, node) in self.nodes.iter_mut().enumerate() {
+            // first save the old position
+            let old_pos = node.position;
             node.apply_forces(&self.edges, i as NId);
             node.apply_velocity();
+            // check whether this node has trespassed a wall
+            // for that go through all walls in your proximity
+            for wall_id in prox_walls[i].iter() {
+                self.edges[usize::from(*wall_id)].trespass_check(i as NId, old_pos, node.position, unsafe{&*nodes_prt});
+            }
         }
     }
 
@@ -289,7 +284,8 @@ impl Node {
 
 pub enum EdgeType {
     Normal,
-    Wall(Vec<NId>), // the Vec holds the trespassing nodes
+    Wall(Vec<(NId, u8)>),   // the Vec holds the trespassing nodes and the orientation at the moment of trespassing
+                            // calculated as orientation(edge_start, edge_end, node_pos)
 }
 
 pub struct Edge {
@@ -324,6 +320,23 @@ impl Edge {
     pub fn contains_node(&self, n_id: NId) -> bool {
         n_id == self.node_indices[0] || n_id == self.node_indices[1]
     }
+    fn trespass_check(&mut self, n_id: NId, old_pos: Point2<f32>, new_pos: Point2<f32>, nodes: &Vec<Node>) {
+        // get your nodes
+        let (node0, node1) = (&nodes[usize::from(self.node_indices[0])], &nodes[usize::from(self.node_indices[1])]);
+        let (start, end) = (node0.position, node1.position);
+        if intersect(start,
+                     end,
+                     old_pos,
+                     new_pos) {
+            // if the lines intersect the node has trespassed
+            // so add it as a trespasser
+            if let EdgeType::Wall(vec) = &mut self.e_type {
+                // calculate its orientation to you
+                let orientation = orientation(start, end, new_pos) as u8;
+                vec.push((n_id, orientation));
+            }
+        }
+    }
     pub fn turn_to_normal(&mut self) {
         self.e_type = EdgeType::Normal;
     }
@@ -350,12 +363,52 @@ impl Edge {
     }
 
     /// combined_factor is SPRING_CONST * dt / mass
-    fn calc_force(&mut self, nodes: &Vec<Node>, combined_factor: f32) {
-        let (node1pos, node2pos) = (&nodes[usize::from(self.node_indices[0])].position, &nodes[usize::from(self.node_indices[1])].position);
+    fn calc_force(&mut self, nodes: &mut Vec<Node>, combined_factor: f32) {
+        let (node1, node2) = (&mut nodes[usize::from(self.node_indices[0])] as *mut Node, &mut nodes[usize::from(self.node_indices[1])] as *mut Node);
+        let (node1pos, node2pos) = unsafe { ((*node1).position, (*node2).position) };
         let vec: Vector2<f32> = node2pos - node1pos; // vector from node1 to node2
-        let norm = norm(&vec);
-        let scalar_force = (norm - self.relaxed_length) * combined_factor;
-        self.velocity_change = (vec / norm) * scalar_force;
+        let vec_norm = norm(&vec);
+        let scalar_force = (vec_norm - self.relaxed_length) * combined_factor;
+        let n_vec: Vector2<f32> = vec / vec_norm;
+        self.velocity_change = n_vec * scalar_force;
+        // if you're a wall apply force to all trespassing nodes (and your nodes as well)
+        if let EdgeType::Wall(trespasser_vec) = &mut self.e_type {
+            trespasser_vec.retain(|(n_id, old_orientation)| {
+                let node = &mut nodes[usize::from(*n_id)];
+                let pos = node.position;
+                // but first check whether this node is still to be considered a trespasser
+                // for that calculate the orientation and check whether it's still the same
+                let new_orientation = orientation(node1pos, node2pos, pos);
+                if new_orientation != (*old_orientation as i32) && new_orientation != 0 {
+                    // if the orientation changed then this node is no longer a trespasser and will just be removed
+                    //println!("REMOVED {}", *n_id);
+                    return false;
+                }
+                // find the point on the wall closest to the node
+                let t = n_vec.x * (pos.x - node1pos.x) + n_vec.y * (pos.y - node1pos.y);
+                let intersection = node1pos + (t * n_vec);
+                // calculate the vector from the node to that point
+                let push = (intersection - pos) * combined_factor * 128.;
+                //println!("t: {}", t);
+                //println!("push:  {:?}", push);
+                //println!("start: {:?}", node1pos);
+                //println!("end:   {:?}", node2pos);
+                //println!("pos:   {:?}", pos);
+                //println!("intersection: {:?}", intersection);
+                // and add it to the velocity of the node (thereby pushing it straight towards the wall)
+                node.velocity += push;
+                // now apply the inverted push to the nodes of the wall
+                // for that calculate how much of it each will get
+                let n2_factor: f32 = t.abs() / vec_norm;
+                let n1_factor: f32 = 1. - n2_factor;
+                // and then apply it
+                unsafe {
+                    (*node1).velocity -= push * n1_factor;
+                    (*node2).velocity -= push * n2_factor;
+                }
+                true
+            });
+        }
     }
     /// the vector that is to be applied to node
     fn force_step(&self, node_index: NId) -> Vector2<f32> {

@@ -5,7 +5,7 @@ use smallvec::{SmallVec};
 
 use fighting::{AdvancingTroop, EdgeFight, Fight, Troop};
 
-use crate::{ANYONE_PLAYER, CANCER_PLAYER, EId, MainState, MAX_UNIT_COUNT, NId, NO_PLAYER, PlayerId, UnitCount};
+use crate::{ANYONE_PLAYER, CANCER_PLAYER, EId, MainState, MAX_UNIT_COUNT, NId, NO_PLAYER, PlayerId, UnitCount, PlayerState};
 use crate::game_mechanics::CellType::Basic;
 use crate::helpers::*;
 use crate::physics::PhysicsState;
@@ -105,11 +105,15 @@ impl GameState {
     }
 
     pub fn remove_edge(&mut self, edge_index: EId, n_ids: [NId; 2]) {
+        let last_index = (self.edges.len() - 1) as EId;
         // make sure no player keeps this edge as his selected edge
         for edge in self.player_edge_ids.iter_mut() {
             if let Some(selected_e_id) = edge {
                 if *selected_e_id == edge_index {
                     *edge = None;
+                } else if *selected_e_id == last_index {
+                    // also make sure the last edge index is updated properly
+                    *selected_e_id = edge_index;
                 }
             }
         }
@@ -119,10 +123,9 @@ impl GameState {
         }
         self.edges.swap_remove(usize::from(edge_index));
         // do housekeeping (i.e. inform all nodes that the edge found at the last index is now found at edge_index)
-        let swapped_id = self.edges.len() as EId;
-        if swapped_id != edge_index {
+        if last_index != edge_index {
             for node in self.nodes.iter_mut() {
-                if node.troop_send_paths.remove(&swapped_id) {
+                if node.troop_send_paths.remove(&last_index) {
                     node.troop_send_paths.insert(edge_index);
                 }
             }
@@ -219,7 +222,7 @@ impl GameState {
         return players_to_be_removed;
     }
     /// Returns players who have to be removed.
-    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, e_to_b_rem: &mut Vec<EId>) -> SmallVec<[PlayerId; 4]> {
+    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, prox_walls: &mut Vec<Vec<EId>>, e_to_b_rem: &mut Vec<EId>) -> SmallVec<[PlayerId; 4]> {
         // update all nodes
         let distribute_troops   = self.check_for_troop_distribution(dt);
         let production_producer = self.check_for_unit_production_producer(dt);
@@ -352,7 +355,7 @@ impl GameState {
         // try to add edges
         for (source_n_id, target_n_id) in edges_to_try_add {
             println!("trying to add cancer edge");
-            MainState::try_add_edge(self, physics_state, source_n_id, target_n_id);
+            MainState::try_add_edge(self, physics_state, source_n_id, target_n_id, prox_walls);
         }
         // update all edges
         for (e_id, edge) in self.edges.iter_mut().enumerate() {

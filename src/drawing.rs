@@ -120,6 +120,18 @@ impl MainState {
             .color(Self::player_color_static(p_id_controlling, players))
     }
 
+    pub fn draw_param_edge_without_edge_static(is_wall: bool, pos: Point2<f32>, vec: Vector2<f32>, spr_width: f32, color: &Color) -> DrawParam {
+        let rotation = ggez::nalgebra::RealField::atan2(vec.y, vec.x);
+        DrawParam::new()
+            .offset(Point2::new(0.0, 0.5))
+            .src(if is_wall { Self::edge_src_rect_bg() }
+                 else       { Self::edge_src_rect_main() })
+            .dest(Point2::new(pos.x, pos.y))
+            .rotation(rotation)
+            .scale(Vector2::new(vec.norm() / spr_width, 1.0))
+            .color(*color)
+    }
+
     pub fn edge_src_rect(p_edge: &Edge) -> Rect {
         return if let EdgeType::Wall(_) = p_edge.e_type {
             Self::edge_src_rect_bg()
