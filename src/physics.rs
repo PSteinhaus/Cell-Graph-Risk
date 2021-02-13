@@ -341,6 +341,7 @@ impl Edge {
         }
     }
     */
+    pub fn is_wall(&self) -> bool { if let EdgeType::Wall = self.e_type { true } else { false } }
     pub fn turn_to_normal(&mut self) {
         self.e_type = EdgeType::Normal;
     }

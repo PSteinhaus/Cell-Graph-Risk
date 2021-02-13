@@ -157,7 +157,7 @@ impl MainState {
             // if it's a wall update the physics state
             if is_wall {
                 let mut edges_to_remove = Vec::<EId>::new();
-                p_state.turn_to_wall(p_state.edge_count() as EId - 1, &mut edges_to_remove);
+                Self::turn_to_wall_static(p_state, &mut g_state.nodes, (p_state.edge_count() as EId) - 1,  &mut edges_to_remove);
                 Self::remove_multiple_edges_static(p_state, g_state, &mut edges_to_remove, prox_walls);
             }
             return true;
@@ -249,6 +249,13 @@ impl MainState {
 
     fn player_node_mut(&mut self, id: PlayerId) -> &mut Node {
         self.physics_state.node_at_mut(self.game_state.player_node_ids[usize::from(id)])
+    }
+
+    fn turn_to_wall_static(p_state: &mut PhysicsState, g_state_nodes: &mut [GameNode], e_id: EId, e_to_be_rem: &mut Vec<EId>) {
+        if p_state.turn_to_wall(e_id, e_to_be_rem) {
+            let n_ids = p_state.edge_at(e_id).node_indices;
+            GameState::turn_to_wall_static(g_state_nodes, e_id, n_ids[0], n_ids[1]);
+        }
     }
 
     fn handle_input(&mut self, ctx: &mut Context) {

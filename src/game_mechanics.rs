@@ -55,18 +55,28 @@ impl GameState {
     }
     /// Add the troop path only if it doesn't lead to a producer
     pub fn add_troop_path_checked(&mut self, n_id: NId, path: EId, physics_state: &PhysicsState) {
-        let target_n_id = physics_state.edge_at(path).other_node(n_id);
+        let edge = physics_state.edge_at(path);
+        let target_n_id = edge.other_node(n_id);
         let target_node_c_type = self.nodes[usize::from(target_n_id)].cell_type;
         let node = &mut self.nodes[usize::from(n_id)];
-        Self::add_troop_path_static(path, node, target_node_c_type);
+        Self::add_troop_path_static(path, node, target_node_c_type, edge.is_wall());
     }
-    pub fn add_troop_path_static(path: EId, node: &mut GameNode, target_node_c_type: CellType) {
+    /// Only adds the path if all checks go through.
+    pub fn add_troop_path_static(path: EId, node: &mut GameNode, target_node_c_type: CellType, is_wall: bool) {
         if let CellType::Producer = target_node_c_type {
             // the target is a producer, don't add the path
-        } else {
+        } else if !is_wall {
             node.add_troop_path(path);
         }
     }
+    /// Cut all distribution paths on this edge.
+    /// (This alone does not stop them from being recreated though.)
+    pub fn turn_to_wall_static(nodes: &mut [GameNode], e_id: EId, n_id0: NId, n_id1: NId) {
+        for n_id in [n_id0, n_id1].iter() {
+            nodes[usize::from(*n_id)].remove_troop_path(&e_id);
+        }
+    }
+
     pub fn add_node(&mut self, cell_type: CellType) {
         self.nodes.push(GameNode::with_type(cell_type));
     }
@@ -89,7 +99,7 @@ impl GameState {
                     // if so, try to add this new edge to its list of troop distribution targets
                     let node = &mut self.nodes[usize::from(n_ids[i])];
                     let e_id = (self.edges.len() - 1) as EId;
-                    Self::add_troop_path_static(e_id, node, cell_types[1 - i]);
+                    Self::add_troop_path_static(e_id, node, cell_types[1 - i], false);
 
                     is_wall = false;
                 },
@@ -231,7 +241,7 @@ impl GameState {
         let mut control_changed_nodes = SmallVec::<[NId; 32]>::new();
         let mut edges_to_try_add = SmallVec::<[(NId, NId); 32]>::new();
         // I need to check different nodes at the same time, so I need a raw pointer to go around Rusts safety checks
-        let nodes_ptr: *const Vec<GameNode> = &self.nodes;
+        let nodes_ptr: *mut Vec<GameNode> = &mut self.nodes;
         use CellType::*;
         for (n_id, node) in self.nodes.iter_mut().enumerate() {
             // first manage possible fights
@@ -244,7 +254,7 @@ impl GameState {
             }
 
             // then check for mutations and advance them
-            if node.advance_mutation(physics_state, dt, n_id as NId, unsafe {&*nodes_ptr}, e_to_b_rem) {
+            if node.advance_mutation(physics_state, dt, n_id as NId, unsafe {&mut *nodes_ptr}, e_to_b_rem) {
                 control_changed_nodes.push(n_id as NId);
             }
 
@@ -272,7 +282,7 @@ impl GameState {
                         const CONNECTION_RANGE: f32 = 600.;
                         // but don't try to connect to wall cells
                         unsafe {
-                            let close_node = & ( * nodes_ptr)[usize::from(close_n_id)];
+                            let close_node = &(*nodes_ptr)[usize::from(close_n_id)];
                             match close_node.cell_type {
                                 Wall => {},
                                 _ => {
@@ -531,7 +541,7 @@ impl GameNode {
     }
 
     /// Returns whether a control change has happened in this node
-    fn advance_mutation(&mut self, physics_state: &mut PhysicsState, dt: f32, n_id: NId, g_nodes: &[GameNode], e_to_b_rem: &mut Vec<EId>) -> bool {
+    fn advance_mutation(&mut self, physics_state: &mut PhysicsState, dt: f32, n_id: NId, g_nodes: &mut [GameNode], e_to_b_rem: &mut Vec<EId>) -> bool {
         if let Some((c_type, duration_left)) = &mut self.mutating {
             *duration_left -= dt;
             if *duration_left <= 0. {
@@ -552,7 +562,11 @@ impl GameNode {
                         self.add_units(CANCER_PLAYER, stolen_units);
                         // add all edges to the send paths list
                         for e_id in physics_state.node_at(n_id as NId).edge_indices.iter() {
-                            self.add_troop_path(*e_id);
+                            // but only if they pass the checks always necessary for doing so
+                            let edge = physics_state.edge_at(*e_id);
+                            let other_n_id = edge.other_node(n_id);
+                            let target_cell_type = g_nodes[usize::from(other_n_id)].cell_type;
+                            GameState::add_troop_path_static(*e_id, self, target_cell_type, edge.is_wall());
                         }
                         return true;
                     }
@@ -568,7 +582,7 @@ impl GameNode {
                             }
                         }
                         for e_id in edges_to_turn_to_walls {
-                            physics_state.turn_to_wall(e_id, e_to_b_rem);
+                            MainState::turn_to_wall_static(physics_state, g_nodes, e_id, e_to_b_rem);
                         }
                     }
                     _ => {}
@@ -651,6 +665,7 @@ impl GameNode {
     pub fn desired_unit_count(&self) -> UnitCount {
         self.desired_unit_count
     }
+    /// WARNING: USE THE FULL CHECKED VERSION INSTEAD IF POSSIBLE
     fn add_troop_path(&mut self, path: EId) {
         self.troop_send_paths.insert(path);
     }
