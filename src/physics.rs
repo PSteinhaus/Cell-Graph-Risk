@@ -155,7 +155,7 @@ impl PhysicsState {
             let start2  = self.node_at(other_edge.node_indices[0]).position;
             let end2    = self.node_at(other_edge.node_indices[1]).position;
             if intersect(start, end, start2, end2) {
-                if let EdgeType::Wall(_) = other_edge.e_type {
+                if let EdgeType::Wall = other_edge.e_type {
                     failure = true;
                     break;
                 } else {
@@ -166,7 +166,7 @@ impl PhysicsState {
         if failure {
             return false;
         } else {
-            self.edges[usize::from(e_id)].e_type = EdgeType::Wall(vec![]);
+            self.edges[usize::from(e_id)].e_type = EdgeType::Wall;
             for o_e_id in e_to_rem {
                 if !edges_to_remove.contains(&o_e_id) {
                     edges_to_remove.push(o_e_id);
@@ -176,24 +176,24 @@ impl PhysicsState {
         }
     }
     /// advance the simulation dt seconds
-    pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<EId>>) {
+    pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<NId>>) {
         let combined_factor = dt * SPRING_CONST / NODE_MASS;
         // calculate the node forces
-        for edge in self.edges.iter_mut() {
-            edge.calc_force(&mut self.nodes, combined_factor);
+        for (e_id, edge) in self.edges.iter_mut().enumerate() {
+            edge.calc_force(&mut self.nodes, combined_factor, &prox_walls[e_id], dt);
         }
         // apply them to the nodes and actually move them
         let nodes_prt = &self.nodes as *const Vec<Node>;
         for (i, node) in self.nodes.iter_mut().enumerate() {
             // first save the old position
-            let old_pos = node.position;
+            //let old_pos = node.position;
             node.apply_forces(&self.edges, i as NId);
             node.apply_velocity();
             // check whether this node has trespassed a wall
             // for that go through all walls in your proximity
-            for wall_id in prox_walls[i].iter() {
-                self.edges[usize::from(*wall_id)].trespass_check(i as NId, old_pos, node.position, unsafe{&*nodes_prt});
-            }
+            //for wall_id in prox_walls[i].iter() {
+            //    self.edges[usize::from(*wall_id)].trespass_check(i as NId, old_pos, node.position, unsafe{&*nodes_prt});
+            //}
         }
     }
 
@@ -284,8 +284,7 @@ impl Node {
 
 pub enum EdgeType {
     Normal,
-    Wall(Vec<(NId, u8)>),   // the Vec holds the trespassing nodes and the orientation at the moment of trespassing
-                            // calculated as orientation(edge_start, edge_end, node_pos)
+    Wall,
 }
 
 pub struct Edge {
@@ -320,6 +319,7 @@ impl Edge {
     pub fn contains_node(&self, n_id: NId) -> bool {
         n_id == self.node_indices[0] || n_id == self.node_indices[1]
     }
+    /*
     fn trespass_check(&mut self, n_id: NId, old_pos: Point2<f32>, new_pos: Point2<f32>, nodes: &Vec<Node>) {
         // get your nodes
         let (node0, node1) = (&nodes[usize::from(self.node_indices[0])], &nodes[usize::from(self.node_indices[1])]);
@@ -337,6 +337,7 @@ impl Edge {
             }
         }
     }
+    */
     pub fn turn_to_normal(&mut self) {
         self.e_type = EdgeType::Normal;
     }
@@ -363,51 +364,81 @@ impl Edge {
     }
 
     /// combined_factor is SPRING_CONST * dt / mass
-    fn calc_force(&mut self, nodes: &mut Vec<Node>, combined_factor: f32) {
+    fn calc_force(&mut self, nodes: &mut Vec<Node>, combined_factor: f32, prox_wall: &Vec<NId>, dt: f32) {
         let (node1, node2) = (&mut nodes[usize::from(self.node_indices[0])] as *mut Node, &mut nodes[usize::from(self.node_indices[1])] as *mut Node);
         let (node1pos, node2pos) = unsafe { ((*node1).position, (*node2).position) };
         let vec: Vector2<f32> = node2pos - node1pos; // vector from node1 to node2
         let vec_norm = norm(&vec);
-        let scalar_force = (vec_norm - self.relaxed_length) * combined_factor;
+        let is_wall = if let EdgeType::Wall = self.e_type { true } else { false };
+        // walls are stronger, meaning the force which they exert is stronger
+        let scalar_force = (vec_norm - self.relaxed_length) * if is_wall { combined_factor * 8. } else { combined_factor };
         let n_vec: Vector2<f32> = vec / vec_norm;
         self.velocity_change = n_vec * scalar_force;
         // if you're a wall apply force to all trespassing nodes (and your nodes as well)
-        if let EdgeType::Wall(trespasser_vec) = &mut self.e_type {
-            trespasser_vec.retain(|(n_id, old_orientation)| {
+        if is_wall {
+            // calculate a vector perpendicular to you
+            // so that it lies on your right side and is normalized
+            let perp: Vector2<f32> = if n_vec.y == 0. {
+                [0., if n_vec.x.is_sign_positive() { -1. } else { 1.}].into()
+            } else {
+                let x: f32 = if n_vec.y.is_sign_positive() { 1.} else { -1. };
+                let unnormalized_perp: Vector2<f32> = [x, x * (-n_vec.x) / n_vec.y].into();
+                unnormalized_perp / unnormalized_perp.norm()
+            };
+            // TODO: as soon as dynamic radius comes into play this has to be changed
+            const RADIUS: f32 = 64.;
+            let perp_with_rad = perp * RADIUS;
+            for n_id in prox_wall.iter() /*0..nodes.len()*/ {
+                //let n_id = *n_id as NId;
+                //if n_id == self.node_indices[0] || n_id == self.node_indices[1] { continue; }
                 let node = &mut nodes[usize::from(*n_id)];
-                let pos = node.position;
-                // but first check whether this node is still to be considered a trespasser
-                // for that calculate the orientation and check whether it's still the same
-                let new_orientation = orientation(node1pos, node2pos, pos);
-                if new_orientation != (*old_orientation as i32) && new_orientation != 0 {
-                    // if the orientation changed then this node is no longer a trespasser and will just be removed
-                    //println!("REMOVED {}", *n_id);
-                    return false;
+                // the problem of the approach used here is that once a node manages to cross the wall
+                // it will not be pushed out again (on the contrary, it will be pushed in!)
+                // this only becomes a problem when nodes are moving at high velocities though
+                // so as a workaround we'll just extrapolate its position a little bit backwards in time
+                // and use that as the current position instead
+                let real_pos = node.position;
+                let mut pos = real_pos;
+                const HIGH_VELOCITY: f32 = 16.;
+                let velocity_factor = node.velocity.x.abs() + node.velocity.y.abs();
+                if velocity_factor >= HIGH_VELOCITY {
+                    //println!("HIGH VELOCITY! dt: {}", dt);
+                    pos -= node.velocity * dt * 4.;
                 }
-                // find the point on the wall closest to the node
-                let t = n_vec.x * (pos.x - node1pos.x) + n_vec.y * (pos.y - node1pos.y);
-                let intersection = node1pos + (t * n_vec);
-                // calculate the vector from the node to that point
-                let push = (intersection - pos) * combined_factor * 128.;
-                //println!("t: {}", t);
-                //println!("push:  {:?}", push);
-                //println!("start: {:?}", node1pos);
-                //println!("end:   {:?}", node2pos);
-                //println!("pos:   {:?}", pos);
-                //println!("intersection: {:?}", intersection);
-                // and add it to the velocity of the node (thereby pushing it straight towards the wall)
-                node.velocity += push;
-                // now apply the inverted push to the nodes of the wall
-                // for that calculate how much of it each will get
-                let n2_factor: f32 = t.abs() / vec_norm;
-                let n1_factor: f32 = 1. - n2_factor;
-                // and then apply it
-                unsafe {
-                    (*node1).velocity -= push * n1_factor;
-                    (*node2).velocity -= push * n2_factor;
+                let orient = orientation(node1pos, node2pos, pos);
+                // if the line from the center of the node to the center + its radius in the direction of this wall
+                // intersects the wall, then this will be considered a collision
+                let perp_facing_the_wall = if orient <= 1 {-perp_with_rad} else {perp_with_rad};
+                if intersect(node1pos, node2pos, pos,real_pos + perp_facing_the_wall) {
+                    //println!("INTERSECT! dt: {}", dt);
+                    // find the point on the wall closest to the node
+                    // (not really anymore, but at least calculate the parameter for finding it,
+                    //  since we do need it to distribute the push-back)
+                    // TODO: there's quite a bit numeric instability around the joints, so maybe find a way to stabilize it
+                    let t = n_vec.x * (pos.x - node1pos.x) + n_vec.y * (pos.y - node1pos.y);
+                    //let intersection = node1pos + (t * n_vec);
+                    // calculate the push
+                    // this actually needs quite a bit of fine tuning to work correctly
+                    let push = -perp_facing_the_wall * combined_factor * (16. + velocity_factor * 4.);
+                    //println!("t: {}", t);
+                    //println!("push:  {:?}", push);
+                    //println!("start: {:?}", node1pos);
+                    //println!("end:   {:?}", node2pos);
+                    //println!("pos:   {:?}", pos);
+                    //println!("intersection: {:?}", intersection);
+                    // and add it to the velocity of the node (thereby pushing it straight away from the wall)
+                    node.velocity += push;
+                    // now apply the inverted push to the nodes of the wall
+                    // for that calculate how much of it each will get
+                    let n2_factor: f32 = t.abs() / vec_norm;
+                    let n1_factor: f32 = 1. - n2_factor;
+                    // and then apply it
+                    unsafe {
+                        (*node1).velocity -= push * n1_factor;
+                        (*node2).velocity -= push * n2_factor;
+                    }
                 }
-                true
-            });
+            }
         }
     }
     /// the vector that is to be applied to node

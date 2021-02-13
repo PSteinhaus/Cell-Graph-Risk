@@ -133,7 +133,7 @@ impl MainState {
     }
 
     pub fn edge_src_rect(p_edge: &Edge) -> Rect {
-        return if let EdgeType::Wall(_) = p_edge.e_type {
+        return if let EdgeType::Wall = p_edge.e_type {
             Self::edge_src_rect_bg()
         } else {
             Self::edge_src_rect_main()

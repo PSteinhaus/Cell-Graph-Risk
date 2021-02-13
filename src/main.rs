@@ -47,7 +47,7 @@ struct MainState {
     game_state: GameState,
     physics_state: PhysicsState,
     proximity_nodes: Vec<Vec<NId>>,
-    proximity_walls: Vec<Vec<EId>>,
+    proximity_walls: Vec<Vec<NId>>,
     edge_sprite_width: f32,
     spr_b_node_dim: (u16, u16),
     spr_b_node: SpriteBatch,
@@ -83,9 +83,8 @@ impl MainState {
         self.physics_state.add_node(position);
         // add to game state
         self.game_state.add_node(cell_type);
-        // reserve two vectors for the proximity state
+        // reserve a vector for the proximity state
         self.proximity_nodes.push(Vec::new());
-        self.proximity_walls.push(Vec::new());
 
         // reserve a text for unit count
         //let txt_fragm = TextFragment::new("42").scale(Scale::uniform(200.0));
@@ -113,7 +112,17 @@ impl MainState {
         }
         // remove it from the proximity state
         self.proximity_nodes.swap_remove(usize::from(node_index));
-        self.proximity_walls.swap_remove(usize::from(node_index));
+        // go through all n_ids saved in proximity_walls and update them if necessary
+        let last_n_id = (self.node_count() - 1) as NId;
+        for vec in self.proximity_walls.iter_mut() {
+            vec.retain(|n_id| *n_id != node_index);
+            for n_id in vec.iter_mut() {
+                if *n_id == last_n_id {
+                    *n_id = node_index;
+                    break;
+                }
+            }
+        }
         // remove from game state
         self.game_state.remove_node(node_index);
         // remove it from physics
@@ -136,11 +145,13 @@ impl MainState {
         Self::add_edge_static(&mut self.physics_state, &mut self.game_state, node1_index, node2_index, &mut self.proximity_walls)
     }
 
-    fn add_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, node1_index: NId, node2_index: NId, prox_walls: &mut Vec<Vec<EId>>) -> bool {
+    fn add_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, node1_index: NId, node2_index: NId, prox_walls: &mut Vec<Vec<NId>>) -> bool {
         // first check if you can add this edge
         if p_state.can_add_edge(node1_index, node2_index) {
             // add to physics
             p_state.add_edge(node1_index, node2_index);
+            // reserve a vector for the proximity state
+            prox_walls.push(Vec::new());
             // add to game state
             let is_wall = g_state.add_edge(&[node1_index, node2_index]);
             // if it's a wall update the physics state
@@ -158,29 +169,18 @@ impl MainState {
         Self::remove_edge_static(&mut self.physics_state, &mut self.game_state, edge_index, &mut self.proximity_walls);
     }
 
-    fn remove_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, edge_index: EId, prox_walls: &mut Vec<Vec<EId>>) {
+    fn remove_edge_static(p_state: &mut PhysicsState, g_state: &mut GameState, edge_index: EId, prox_walls: &mut Vec<Vec<NId>>) {
         // get the nodes connected by this edge
         let n_ids = p_state.edge_at(edge_index).node_indices;
-        let last_e_id = (p_state.edge_count() - 1) as EId;
         // remove from game state
         g_state.remove_edge(edge_index, n_ids);
         // remove from physics
         p_state.remove_edge(edge_index);
         // remove from the proximity state
-        for n_id in n_ids.iter() {
-            for vec in prox_walls.iter_mut() {
-                vec.retain(|e_id| *e_id != edge_index);
-                for e_id in vec.iter_mut() {
-                    if *e_id == last_e_id {
-                        *e_id = edge_index;
-                        break;
-                    }
-                }
-            }
-        }
+        prox_walls.swap_remove(usize::from(edge_index));
     }
 
-    fn remove_multiple_edges_static(p_state: &mut PhysicsState, g_state: &mut GameState, edges_to_remove: &mut Vec<EId>, prox_walls: &mut Vec<Vec<EId>>) {
+    fn remove_multiple_edges_static(p_state: &mut PhysicsState, g_state: &mut GameState, edges_to_remove: &mut Vec<EId>, prox_walls: &mut Vec<Vec<NId>>) {
         // here we need to use some caution
         // removing an edge will invalidate the EId of the last edge
         // therefore we need to check whether the last edge is contained in this collection
@@ -301,7 +301,7 @@ impl MainState {
                                 // calculate the boost intensity
                                 let boost = norm / 2.5;
                                 // calculate the consumption of units that this boost causes
-                                let new_consumption = *consumption + (boost / 10.);
+                                let new_consumption = *consumption /*+ (boost / 10.)*/;
                                 // check if the consumption need can be met
                                 let troop_op = (*g_node_ptr).troop_of_player_mut(player_id as PlayerId);
                                 if let Some(troop) = troop_op {
@@ -455,7 +455,7 @@ impl MainState {
         }
     }
 
-    pub fn try_add_edge(g_state: &mut GameState, p_state: &mut PhysicsState, start_n_id: NId, target_n_id: NId, prox_walls: &mut Vec<Vec<EId>>) -> bool {
+    pub fn try_add_edge(g_state: &mut GameState, p_state: &mut PhysicsState, start_n_id: NId, target_n_id: NId, prox_walls: &mut Vec<Vec<NId>>) -> bool {
         const NEW_EDGE_UNIT_COST: UnitCount = 2;
         let game_node = &mut g_state.nodes[usize::from(start_n_id)];
         let ctrl = game_node.controlled_by();
