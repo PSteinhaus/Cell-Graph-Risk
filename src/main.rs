@@ -10,7 +10,7 @@ use ggez::timer;
 use ggez::{Context, GameResult};
 use std::env;
 use std::path;
-use crate::physics::{PhysicsState, Node};
+use crate::physics::{PhysicsState, Node, EdgeType};
 use crate::game_mechanics::*;
 use rand::{Rng, thread_rng};
 use ggez::graphics::{Rect, Image, DrawParam, Color, WHITE, BLACK};
@@ -301,7 +301,7 @@ impl MainState {
                                 // calculate the boost intensity
                                 let boost = norm / 2.5;
                                 // calculate the consumption of units that this boost causes
-                                let new_consumption = *consumption /*+ (boost / 10.)*/;
+                                let new_consumption = *consumption /*+ (boost / 10.)*/; // TODO: reenable this when debugging stops
                                 // check if the consumption need can be met
                                 let troop_op = (*g_node_ptr).troop_of_player_mut(player_id as PlayerId);
                                 if let Some(troop) = troop_op {
@@ -367,13 +367,17 @@ impl MainState {
                 // check the selected edge for its angle and move there if the direction pressed is roughly the same
                 let mut chosen_node = NO_NODE;
                 if let Some(pl_edge_id) = self.game_state.player_edge_ids[player_id] {
-                    let vec = self.physics_state.edge_vec_2d(pl_edge_id, p_node_id);
-                    let e_angle = vec.y.atan2(vec.x);
-                    const SELECTED_EDGE_PRIORITY_DIFF: f32 = 1.5;
-                    if angle_diff_abs(e_angle, angle) < SELECTED_EDGE_PRIORITY_DIFF {
-                        let node = self.physics_state.edge_at(pl_edge_id).other_node(p_node_id);
-                        if self.game_state.nodes[usize::from(node)].player_can_access(player_id as PlayerId) {
-                            chosen_node = self.physics_state.edge_at(pl_edge_id).other_node(p_node_id);
+                    let edge = self.physics_state.edge_at(pl_edge_id);
+                    if let EdgeType::Wall = edge.e_type {}
+                    else {
+                        let vec = self.physics_state.edge_vec_2d(pl_edge_id, p_node_id);
+                        let e_angle = vec.y.atan2(vec.x);
+                        const SELECTED_EDGE_PRIORITY_DIFF: f32 = 1.5;
+                        if angle_diff_abs(e_angle, angle) < SELECTED_EDGE_PRIORITY_DIFF {
+                            let node = edge.other_node(p_node_id);
+                            if self.game_state.nodes[usize::from(node)].player_can_access(player_id as PlayerId) {
+                                chosen_node = self.physics_state.edge_at(pl_edge_id).other_node(p_node_id);
+                            }
                         }
                     }
                 }
@@ -381,14 +385,18 @@ impl MainState {
                     // go through all edges of the node and find the edge and associated neighbor node closest to the chosen angle
                     let mut smallest_diff: f32 = 1.5;  // the worst fit still needs to be better than this
                     for e_id in p_node.edge_indices.iter() {
-                        let vec = self.physics_state.edge_vec_2d(*e_id, p_node_id);
-                        let edge_angle = vec.y.atan2(vec.x);
-                        let difference = angle_diff_abs(edge_angle, angle);
-                        if difference < smallest_diff {
-                            let node = self.physics_state.edge_at(*e_id).other_node(p_node_id);
-                            if self.game_state.nodes[usize::from(node)].player_can_access(player_id as PlayerId) {
-                                smallest_diff = difference;
-                                chosen_node = node;
+                        let edge = self.physics_state.edge_at(*e_id as EId);
+                        if let EdgeType::Wall = edge.e_type {}
+                        else {
+                            let vec = self.physics_state.edge_vec_2d(*e_id, p_node_id);
+                            let edge_angle = vec.y.atan2(vec.x);
+                            let difference = angle_diff_abs(edge_angle, angle);
+                            if difference < smallest_diff {
+                                let node = edge.other_node(p_node_id);
+                                if self.game_state.nodes[usize::from(node)].player_can_access(player_id as PlayerId) {
+                                    smallest_diff = difference;
+                                    chosen_node = node;
+                                }
                             }
                         }
                     }

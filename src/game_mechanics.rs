@@ -270,11 +270,17 @@ impl GameState {
                     for close_n_id in proximity_nodes(prox_nodes, n_id as NId) {
                         let close_n_id = *close_n_id;
                         const CONNECTION_RANGE: f32 = 600.;
-                        if physics_state.distance(n_id as NId, close_n_id) <= CONNECTION_RANGE {
-                            unsafe {
-                                let close_node = &(*nodes_ptr)[usize::from(close_n_id)];
-                                if (*close_node).controlled_by() != CANCER_PLAYER && !neighbors.contains(&(close_n_id as NId)) {
-                                    edges_to_try_add.push((n_id as NId, close_n_id as NId));
+                        // but don't try to connect to wall cells
+                        unsafe {
+                            let close_node = & ( * nodes_ptr)[usize::from(close_n_id)];
+                            match close_node.cell_type {
+                                Wall => {},
+                                _ => {
+                                    if physics_state.distance(n_id as NId, close_n_id) <= CONNECTION_RANGE
+                                        && (*close_node).controlled_by() != CANCER_PLAYER && !neighbors.contains(&(close_n_id as NId))
+                                    {
+                                        edges_to_try_add.push((n_id as NId, close_n_id as NId));
+                                    }
                                 }
                             }
                         }

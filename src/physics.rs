@@ -135,6 +135,8 @@ impl PhysicsState {
             }
         }
     }
+    /// returns whether the transformation was successful;
+    /// it only adds to the vector if it is;
     pub fn turn_to_wall(&mut self, e_id: EId, edges_to_remove: &mut Vec<EId>) -> bool {
         let edge = &self.edges[usize::from(e_id)];
         let mut e_to_rem = SmallVec::<[EId; 32]>::new();
@@ -174,6 +176,7 @@ impl PhysicsState {
             }
             true
         }
+        // TODO: make the game state react to this by disabling all transport on that edge
     }
     /// advance the simulation dt seconds
     pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<NId>>) {
