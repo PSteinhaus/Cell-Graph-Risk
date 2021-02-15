@@ -301,6 +301,7 @@ impl MainState {
                 let g_node_ptr = self.game_state.player_node_mut(player_id as PlayerId) as *mut GameNode;
                 unsafe {
                     match (*g_node_ptr).cell_type_mut() {
+                        CellType::Wall => {},   // not sure if I really want to disallow adding edges coming from walls
                         CellType::Propulsion(consumption, current_angle) => {
                             // boost the cell into the chosen direction, burning units in the process
                             const BOOST_DEADZONE: f32 = 0.20;
@@ -512,7 +513,7 @@ impl PlayerState {
             gamepad_id,
             left_axis_cooldown: 0.0,
             gamepad_pressed_timers: [0.0; 20],
-            unit_count_draw_mode: UnitCountDrawMode::Units,
+            unit_count_draw_mode: UnitCountDrawMode::NoDrawing,
         }
     }
     /// Advances the cooldown timer dt seconds and returns true if the cooldown is done.
@@ -645,7 +646,8 @@ impl event::EventHandler for MainState {
         }
         // Fill the nodes spritebatch
         for (i, node) in self.physics_state.node_iter().enumerate() {
-            if !self.game_state.player_node_ids.contains(&(i as NId)) {
+            let player_on_this = self.game_state.player_node_ids.iter().position(|n_id| *n_id == (i as NId));
+            if let None = player_on_this {
                 // draw the background
                 // TODO: instead of using scale here better use some prepared sprites
                 let scale = match self.game_state.nodes[usize::from(i)].cell_type() {
@@ -671,21 +673,39 @@ impl event::EventHandler for MainState {
             let g_node = &self.game_state.nodes[i];
             let ctrl = g_node.controlled_by();
             use UnitCountDrawMode::*;
-            let u_draw_mode = match ctrl {
-                NO_PLAYER | ANYONE_PLAYER => { NoDrawing },
-                CANCER_PLAYER => { Units }
-                p_id => { self.players[usize::from(p_id)].unit_count_draw_mode }
-            };
+            // behavior depends on whether this is the current node of a player
+            let (u_draw_mode, scale) =
+                if let Some(p_id) = player_on_this {
+                    const P_SCALE: f32 = 3.;
+                    // if it is, then it also depends on whether the player is currently changing the desired unit count
+                    use Button::*;
+                    (if self.players[p_id].pressed_for(LeftTrigger2) > 0. || self.players[p_id].pressed_for(RightTrigger2) > 0. {
+                        DesiredCount
+                    } else {
+                        match self.players[p_id].unit_count_draw_mode {
+                            NoDrawing => Units, // no drawing is not allowed when the player is there
+                            other_mode => other_mode,
+                        }
+                    }, P_SCALE)
+                } else {
+                    const N_SCALE: f32 = 3.;
+                    (match ctrl {
+                        NO_PLAYER | ANYONE_PLAYER => { NoDrawing },
+                        CANCER_PLAYER => { NoDrawing }
+                        p_id => { self.players[usize::from(p_id)].unit_count_draw_mode }
+                    }, N_SCALE)
+                };
+
             match u_draw_mode {
                 NoDrawing => {},
                 Units => {
                     let unit_count_string = g_node.troop_of_player(ctrl).unwrap().count.to_string();
                     self.spr_b_text.add(unit_count_string.as_str(),
-                                        DrawParam::default().dest(node.position).scale(Vector2::new(3.0, 3.0)).offset(Point2::new(0.5, 0.5)).color(WHITE));
+                                        DrawParam::default().dest(node.position).scale(Vector2::new(scale, scale)).offset(Point2::new(0.5, 0.5)).color(WHITE));
                 },
                 DesiredCount => {
                     self.spr_b_text.add(g_node.desired_unit_count().to_string().as_str(),
-                                        DrawParam::default().dest(node.position).scale(Vector2::new(3.0, 3.0)).offset(Point2::new(0.5, 0.5)).color(BLACK));
+                                        DrawParam::default().dest(node.position).scale(Vector2::new(scale, scale)).offset(Point2::new(0.5, 0.5)).color(BLACK));
                 },
             }
         }
