@@ -42,6 +42,15 @@ const NO_PLAYER: PlayerId = u8::MAX;
 const ANYONE_PLAYER: PlayerId = u8::MAX - 1;
 const CANCER_PLAYER: PlayerId = u8::MAX - 2;
 
+fn is_player(p_id: PlayerId) -> bool {
+    // equivalent to this:
+    //match p_id {
+    //    NO_PLAYER | ANYONE_PLAYER | CANCER_PLAYER => false,
+    //    id => true
+    //}
+    p_id < CANCER_PLAYER
+}
+
 struct MainState {
     players: Vec<PlayerState>,
     game_state: GameState,
@@ -575,7 +584,9 @@ impl event::EventHandler for MainState {
         const DESIRED_DELTA: f32 = 1.0 / (DESIRED_SIMULATION_FPS as f32);
         while timer::check_update_time(ctx, DESIRED_SIMULATION_FPS) {
             let secs = dt.as_secs_f32();
-            let ratio = (DESIRED_DELTA / secs) * thread_rng().gen_range(0.997, 1.003);
+            let ratio = (DESIRED_DELTA / secs) * thread_rng().gen_range(0.997, 1.003);  // this is for some added randomness because it had
+                                                                                                    // a nice effect back when edges were spring based
+                                                                                                    // TODO: check if it's still a plus or can be removed
             let dur = ratio * secs;
             // update the game state
             let mut edges_to_be_removed = Vec::<EId>::new();
@@ -593,6 +604,8 @@ impl event::EventHandler for MainState {
             // update the physics simulation
             self.physics_state.simulate_step(dur, &self.proximity_walls, &mut edges_to_be_removed);
             Self::remove_multiple_edges_static(&mut self.physics_state, &mut self.game_state, &mut edges_to_be_removed, &mut self.proximity_walls);
+            // position the camera nicely
+            self.position_camera(ctx);
             self.ticks += 1;
         }
         // TODO: iterate over gamepads from time to time and check whether they're still connected;
@@ -699,7 +712,7 @@ impl event::EventHandler for MainState {
             match u_draw_mode {
                 NoDrawing => {},
                 Units => {
-                    let unit_count_string = g_node.troop_of_player(ctrl).unwrap().count.to_string();
+                    let unit_count_string = if let Some(t) = g_node.troop_of_player(ctrl) { t.count.to_string() } else { "0".to_string() };
                     self.spr_b_text.add(unit_count_string.as_str(),
                                         DrawParam::default().dest(node.position).scale(Vector2::new(scale, scale)).offset(Point2::new(0.5, 0.5)).color(WHITE));
                 },

@@ -1,12 +1,12 @@
 use std::cmp::min;
 
 use ggez::{Context, timer};
-use ggez::graphics::{BLACK, Color, DrawParam, Rect, WHITE};
+use ggez::graphics::{BLACK, Color, DrawParam, Rect, WHITE, set_screen_coordinates, drawable_size};
 use ggez::graphics::spritebatch::SpriteBatch;
 use ggez::nalgebra::{Point2, Vector2};
 use smallvec::SmallVec;
 
-use crate::{ANYONE_PLAYER, CANCER_PLAYER, MainState, NId, NO_PLAYER, PlayerId, PlayerState};
+use crate::{ANYONE_PLAYER, CANCER_PLAYER, MainState, NId, NO_PLAYER, PlayerId, PlayerState, is_player};
 use crate::game_mechanics::{CellType, GameEdge, GameNode};
 use crate::game_mechanics::fighting::Troop;
 use crate::helpers::lerp_colors;
@@ -201,5 +201,46 @@ impl MainState {
                 .color(Self::battle_color_static(players, ctx, fight.troop_iter()))
             );
         }
+    }
+
+    pub fn position_camera(&self, ctx: &mut Context) {
+        let (mut s_x, mut s_y, mut b_x, mut b_y) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for (n_id, node) in self.physics_state.nodes.iter().enumerate() {
+            // only count nodes in use by the players
+            if is_player(self.game_state.nodes[n_id].controlled_by()) {
+                let pos = node.position;
+                if pos.x < s_x { s_x = pos.x }
+                if pos.x > b_x { b_x = pos.x }
+                if pos.y < s_y { s_y = pos.y }
+                if pos.y > b_y { b_y = pos.y }
+            }
+        }
+        // just to be sure
+        if s_x == f32::INFINITY {
+            (s_x, s_y, b_x, b_y) = (0., 0., 1024., 1024.);
+        }
+        const BORDER: f32 = 2048.;
+        let (mut w, mut h) = (b_x - s_x + (BORDER * 2.), b_y - s_y + (BORDER * 2.));
+        // make sure the ratio matches the screen ratio
+        let screen_size = drawable_size(ctx);
+        let ratio = screen_size.0 / screen_size.1;
+        let current_ratio = w / h;
+        if current_ratio > ratio {
+            // the width is too great, increase the height
+            let old_h = h;
+            h = 1. / ratio * w;
+            // keep the image centered
+            s_y -= (h - old_h) / 2.;
+        } else {
+            // the height is too great, increase the width
+            let old_w = w;
+            w = ratio * h;
+            // keep the image centered
+            s_x -= (w - old_w) / 2.;
+        }
+        // TODO: make the camera movement smooth in cases where there is a big instantaneous change
+        //       i.e. when a node gets added or removed to the set of player used nodes
+        let screen_coords = Rect::new(s_x - BORDER, s_y - BORDER, w, h);
+        set_screen_coordinates(ctx, screen_coords);
     }
 }
