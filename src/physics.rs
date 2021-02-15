@@ -96,7 +96,31 @@ impl PhysicsState {
     pub fn can_add_edge(&self, node1_index: NId, node2_index: NId) -> bool {
         // check if such an edge already exists and whether the two nodes given are actually two different nodes
         // (but don't check whether they're in bounds, as that's unnecessary for my purposes)
-        node1_index != node2_index && !self.are_neighbors(node1_index, node2_index)
+        let arent_neighbors = node1_index != node2_index && !self.are_neighbors(node1_index, node2_index);
+        // also check that there's no wall in the way
+        if arent_neighbors {
+            let n_pos_0 = self.node_at(node1_index).position;
+            let n_pos_1 = self.node_at(node2_index).position;
+            for edge in self.edges.iter() {
+                if edge.is_wall() {
+                    // if this edge contains one of the nodes that we try to connect to/from
+                    // then we want to ignore any possible collisions
+                    if !edge.node_indices.contains(&node1_index) &&
+                        !edge.node_indices.contains(&node2_index)
+                    {
+                        let (n_id0, n_id1) = (edge.node_indices[0], edge.node_indices[1]);
+                        let start = self.node_at(n_id0).position;
+                        let end   = self.node_at(n_id1).position;
+                        if intersect(start, end, n_pos_0, n_pos_1) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        } else {
+            return false;
+        }
     }
     pub fn distance(&self, node1_index: NId, node2_index: NId) -> f32 {
         let (node1, node2) = (self.node_at(node1_index), self.node_at(node2_index));
@@ -158,7 +182,7 @@ impl PhysicsState {
             let start2  = self.node_at(other_edge.node_indices[0]).position;
             let end2    = self.node_at(other_edge.node_indices[1]).position;
             if intersect(start, end, start2, end2) {
-                if let EdgeType::Wall = other_edge.e_type {
+                if other_edge.is_wall() {
                     failure = true;
                     break;
                 } else {
@@ -204,12 +228,20 @@ impl PhysicsState {
         }
     }
 
+    pub fn edge_positions(&self, e_id: EId) -> (Point2<f32>, Point2<f32>) {
+        let edge = self.edge_at(e_id);
+        let start = self.node_at(edge.node_indices[0]).position;
+        let end   = self.node_at(edge.node_indices[1]).position;
+
+        (start, end)
+    }
+
     pub fn edge_vec_2d(&self, e_id: EId, start_node: NId) -> Vector2<f32> {
         let edge = self.edge_at(e_id);
-        let start = self.node_at(start_node);
-        let end = self.node_at(edge.other_node(start_node));
+        let start = self.node_at(start_node).position;
+        let end   = self.node_at(edge.other_node(start_node)).position;
 
-        end.position - start.position
+        end - start
     }
 
     pub fn edge_length_id(&self, e_id: EId) -> f32 {

@@ -301,7 +301,6 @@ impl MainState {
                 let g_node_ptr = self.game_state.player_node_mut(player_id as PlayerId) as *mut GameNode;
                 unsafe {
                     match (*g_node_ptr).cell_type_mut() {
-                        CellType::Wall => {},
                         CellType::Propulsion(consumption, current_angle) => {
                             // boost the cell into the chosen direction, burning units in the process
                             const BOOST_DEADZONE: f32 = 0.20;
