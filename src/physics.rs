@@ -396,7 +396,7 @@ impl Edge {
         } else {
             let is_wall = if let EdgeType::Wall = self.e_type { true } else { false };
             // walls are stronger, meaning the force which they exert is stronger
-            let scalar_force = (ratio - 1.) * combined_factor * 1024. * if is_wall { 8. } else { 1. };   // new elastic force
+            let scalar_force = (ratio - 1.) * combined_factor * 1024. * if is_wall { 4. } else { 1. };   // new elastic force
             //let scalar_force = (vec_norm - self.relaxed_length) * if is_wall { combined_factor * 8. } else { combined_factor }; // old spring based force
             let n_vec: Vector2<f32> = vec / vec_norm;
             self.velocity_change = n_vec * scalar_force;

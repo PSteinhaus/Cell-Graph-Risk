@@ -105,19 +105,26 @@ impl MainState {
             vec,
             self.edge_sprite_width,
             p_id_controlling,
-            &self.players
+            &self.players,
+            false
         )
     }
 
-    pub fn draw_param_edge_static(p_edge: &Edge, pos: Point2<f32>, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState]) -> DrawParam {
+    pub fn draw_param_edge_static(p_edge: &Edge, pos: Point2<f32>, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState], use_strain: bool) -> DrawParam {
         let rotation = ggez::nalgebra::RealField::atan2(vec.y, vec.x);
+        let nrm = vec.norm();
+        let color = if use_strain {
+            lerp_colors(&BLACK, &Self::player_color_static(p_id_controlling, players), p_edge.strain(nrm))
+        } else {
+            Self::player_color_static(p_id_controlling, players)
+        };
         DrawParam::new()
             .offset(Point2::new(0.0, 0.5))
             .src(Self::edge_src_rect(p_edge))
             .dest(Point2::new(pos.x, pos.y))
             .rotation(rotation)
-            .scale(Vector2::new(vec.norm() / spr_width, 1.0))
-            .color(Self::player_color_static(p_id_controlling, players))
+            .scale(Vector2::new(nrm / spr_width, 1.0))
+            .color(color)
     }
 
     pub fn draw_param_edge_without_edge_static(is_wall: bool, pos: Point2<f32>, vec: Vector2<f32>, spr_width: f32, color: &Color) -> DrawParam {
@@ -168,7 +175,8 @@ impl MainState {
             vec,
             spr_width,
             g_edge.controlled_by(),
-            players
+            players,
+            true
         ));
         let src_rect = Self::draw_source_rect_static(&CellType::Basic, spr_b_node_dim);
         // calculate the troop positions based on the starting point of the edge and the advancement of the troops
