@@ -46,6 +46,7 @@ struct MainState {
     players: Vec<PlayerState>,
     game_state: GameState,
     physics_state: PhysicsState,
+    ticks: usize,
     proximity_nodes: Vec<Vec<NId>>,
     proximity_walls: Vec<Vec<NId>>,
     edge_sprite_width: f32,
@@ -64,6 +65,7 @@ impl MainState {
             players: Vec::new(),
             game_state: GameState::new(),
             physics_state: PhysicsState::new(),
+            ticks: 0,
             proximity_nodes: Vec::new(),
             proximity_walls: Vec::new(),
             edge_sprite_width: img.width() as f32,
@@ -589,7 +591,9 @@ impl event::EventHandler for MainState {
             // update the proximity state
             self.update_proximity_state(ctx);
             // update the physics simulation
-            self.physics_state.simulate_step(dur, &self.proximity_walls);
+            self.physics_state.simulate_step(dur, &self.proximity_walls, &mut edges_to_be_removed);
+            Self::remove_multiple_edges_static(&mut self.physics_state, &mut self.game_state, &mut edges_to_be_removed, &mut self.proximity_walls);
+            self.ticks += 1;
         }
         // TODO: iterate over gamepads from time to time and check whether they're still connected;
         //       if not remove the player associated with the pad in question;

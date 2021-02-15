@@ -542,6 +542,7 @@ impl GameNode {
 
     /// Returns whether a control change has happened in this node
     fn advance_mutation(&mut self, physics_state: &mut PhysicsState, dt: f32, n_id: NId, g_nodes: &mut [GameNode], e_to_b_rem: &mut Vec<EId>) -> bool {
+        let mut control_change = false;
         if let Some((c_type, duration_left)) = &mut self.mutating {
             *duration_left -= dt;
             if *duration_left <= 0. {
@@ -568,7 +569,7 @@ impl GameNode {
                             let target_cell_type = g_nodes[usize::from(other_n_id)].cell_type;
                             GameState::add_troop_path_static(*e_id, self, target_cell_type, edge.is_wall());
                         }
-                        return true;
+                        control_change = true;
                     }
                     Wall => {
                         // check whether edges have to be turned into walls now

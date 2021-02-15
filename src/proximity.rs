@@ -17,7 +17,7 @@ impl MainState {
         // the reason for this is to balance the work of having
         // to go through all nodes^2 all the time
         const PHASES: usize = 8;
-        let phase = timer::ticks(ctx) % PHASES;
+        let phase = self.ticks % PHASES;
         let count = self.node_count();
         let part = count / PHASES;
         let start = phase * part;
