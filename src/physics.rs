@@ -371,13 +371,13 @@ impl Edge {
         self.node_indices.iter().position(|x| *x == n_id).unwrap()
     }
 
-    /// reaches 1 when the length differs from the relaxed length by 50%
+    /// reaches 1 when the length differs from the relaxed length by a certain percentage
     pub fn strain(&self, current_length: f32) -> f32 {
-        Self::strain_static(current_length / self.relaxed_length)
+        Self::strain_static(current_length / self.relaxed_length, self.is_wall())
     }
-    /// reaches 1 when the length differs from the relaxed length by 50%
-    pub fn strain_static(ratio_length_to_relaxed_length: f32) -> f32 {
-        (ratio_length_to_relaxed_length - 1.).abs() * 1.5
+    /// reaches 1 when the length differs from the relaxed length by a certain percentage
+    pub fn strain_static(ratio_length_to_relaxed_length: f32, is_wall: bool) -> f32 {
+        (ratio_length_to_relaxed_length - 1.).abs() * if is_wall { 2.5 } else { 1.5 }
     }
 
     /// Returns true if the strain is too great and the edge has to be removed.
@@ -388,13 +388,13 @@ impl Edge {
         let vec_norm = norm(&vec);
         // first check the strain and cut this edge if it's too much
         let ratio = vec_norm / self.relaxed_length;
-        if Self::strain_static(ratio) >= 1. {
+        let is_wall = self.is_wall();
+        if Self::strain_static(ratio, is_wall) >= 1. {
             // the strain is too big, cut this edge
             // also set the current force to 0 so that this edge will be ignored when calculating the node forces
             self.velocity_change = [0., 0.].into();
             return true;
         } else {
-            let is_wall = if let EdgeType::Wall = self.e_type { true } else { false };
             // walls are stronger, meaning the force which they exert is stronger
             let scalar_force = (ratio - 1.) * combined_factor * 1024. * if is_wall { 4. } else { 1. };   // new elastic force
             //let scalar_force = (vec_norm - self.relaxed_length) * if is_wall { combined_factor * 8. } else { combined_factor }; // old spring based force
