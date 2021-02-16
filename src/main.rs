@@ -22,6 +22,7 @@ use ggez::input::gamepad::gilrs::ev::Button::South;
 use smallvec::{SmallVec, smallvec};
 use std::mem::transmute;
 use crate::text::SpriteText;
+use std::f32::consts::PI;
 
 mod physics;
 mod game_mechanics;
@@ -209,6 +210,66 @@ impl MainState {
             }
             Self::remove_edge_static(p_state, g_state, first_e_id, prox_walls);
             edges_to_remove.pop();
+        }
+    }
+
+    fn split_nodes(&mut self, nodes_to_be_split: Vec<NId>) {
+        for n_id in nodes_to_be_split.into_iter() {
+            // get the old node position
+            let pos = self.physics_state.node_at(n_id).position;
+            // add a new one there
+            self.add_node_of_type(pos, CellType::Basic);
+
+            // give half the edges to the new one
+            let p_node = self.physics_state.node_at_mut(n_id);
+            let g_node = &mut self.game_state.nodes[usize::from(n_id)];
+            let mut switched_edges: SmallVec<[EId; 16]> = smallvec![];
+            for i in 0..p_node.edge_indices.len() / 2 {
+                let e_removed = p_node.edge_indices.pop().unwrap();
+                g_node.remove_troop_path(&e_removed);
+                switched_edges.push(e_removed);
+            }
+
+            // give half the units to the new one
+            let p_id = g_node.controlled_by();
+            let troop = g_node.troop_of_player_mut(p_id);
+            let mut units: UnitCount = 0;
+            if let Some(t) = troop {
+                units = t.remove_units(t.count / 2);
+            }
+
+            // push the nodes away from each other
+            let angle = rand::thread_rng().gen_range(0f32, 2. * PI);
+            const PUSH_SCALE: f32 = 5.;
+            let push = Vector2::<f32>::from([angle.cos(), angle.sin()]) * PUSH_SCALE;
+            p_node.add_velocity(push);
+
+            let new_n_id = (self.node_count() - 1) as NId;
+            let new_p_node = &mut self.physics_state.nodes[usize::from(new_n_id)];
+            // gain edges
+            for e_id in switched_edges.into_iter() {
+                new_p_node.edge_indices.push(e_id);
+                let edge = &mut self.physics_state.edges[usize::from(e_id)];
+                edge.node_indices[edge.pos_in_edge(n_id as NId)] = new_n_id;
+                // make sure that players can only have this edge selected if they're on the other node in this edge
+                for (p_id, p_e_id_opt) in self.game_state.player_edge_ids.iter_mut().enumerate() {
+                    if let Some(p_e_id) = p_e_id_opt {
+                        if *p_e_id == e_id {
+                            if self.game_state.player_node_ids[p_id] != edge.other_node(new_n_id) {
+                                *p_e_id_opt = None;
+                            }
+                        }
+                    }
+                }
+            }
+            // gain units
+            let new_g_node = &mut self.game_state.nodes[usize::from(new_n_id)];
+            new_g_node.add_units(p_id,units);
+            // make sure it has the right owner even if no units were added
+            new_g_node.set_controlled_by(p_id);
+
+            // get pushed
+            new_p_node.add_velocity(-push);
         }
     }
 
@@ -605,12 +666,15 @@ impl event::EventHandler for MainState {
             let dur = ratio * secs;
             // update the game state
             let mut edges_to_be_removed = Vec::<EId>::new();
+            let mut nodes_to_be_split   = Vec::<NId>::new();
             let players_to_be_removed = self.game_state.update(&mut self.physics_state,
                                                                dur,
                                                                &mut self.proximity_nodes,
                                                                &mut self.proximity_walls,
-                                                               &mut edges_to_be_removed);
+                                                               &mut edges_to_be_removed,
+                                                               &mut nodes_to_be_split);
             Self::remove_multiple_edges_static(&mut self.physics_state, &mut self.game_state, &mut edges_to_be_removed, &mut self.proximity_walls);
+            self.split_nodes(nodes_to_be_split);
             for player in players_to_be_removed.into_iter() {
                 self.remove_player(player);
             }
@@ -675,20 +739,23 @@ impl event::EventHandler for MainState {
         // Fill the nodes spritebatch
         for (i, node) in self.physics_state.node_iter().enumerate() {
             let player_on_this = self.game_state.player_node_ids.iter().position(|n_id| *n_id == (i as NId));
+            let c_type = self.game_state.nodes[usize::from(i)].cell_type();
             if let None = player_on_this {
-                // draw the background
-                // TODO: instead of using scale here better use some prepared sprites
-                let scale = match self.game_state.nodes[usize::from(i)].cell_type() {
-                    CellType::Cancer => Vector2::new(1.65, 1.65),
-                    CellType::Propulsion(_,_) => Vector2::new(1.65, 1.65),
-                    _ => Vector2::new(1.55, 1.55),
-                };
-                let p = self.draw_param_node(i as NId, ctx)
-                    .scale(scale)
-                    .color(Self::color_bg());
-                self.spr_b_node.add(p);
+                if let CellType::Wall = c_type {} else {
+                    // draw the background
+                    // TODO: instead of using scale here better use some prepared sprites
+                    let scale = match c_type {
+                        CellType::Cancer => Vector2::new(1.65, 1.65),
+                        CellType::Propulsion(_,_) => Vector2::new(1.65, 1.65),
+                        _ => Vector2::new(1.55, 1.55),
+                    };
+                    let p = self.draw_param_node(i as NId, ctx)
+                        .scale(scale)
+                        .color(Self::color_bg());
+                    self.spr_b_node.add(p);
+                }
             }
-            if let CellType::Wall = self.game_state.nodes[usize::from(i)].cell_type() {
+            if let CellType::Wall = c_type {
                 let p = self.draw_param_node(i as NId, ctx)
                     .color(Self::color_bg())
                     .src(self.draw_source_rect(&CellType::Basic));
@@ -823,10 +890,14 @@ impl event::EventHandler for MainState {
                 let game_node = self.game_state.player_node_mut(player_id);
                 game_node.try_start_mutation(CellType::Wall);
             }
-            // "D_PAD_UP": transform cell into basic cell
+            // "D_PAD_UP": transform cell into basic cell, or attempt a split mutation, if already basic
             DPadUp => {
                 let game_node = self.game_state.player_node_mut(player_id);
-                game_node.try_start_mutation(CellType::Basic);
+                if let CellType::Basic = game_node.cell_type() {
+                    game_node.try_start_mutation(CellType::Split);
+                } else {
+                    game_node.try_start_mutation(CellType::Basic);
+                }
             }
             // "D_PAD_LEFT":  transform cell into propulsion cell
             DPadLeft => {

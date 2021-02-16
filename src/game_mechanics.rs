@@ -46,6 +46,8 @@ impl GameState {
         self.player_new_edge_n_ids.push(None);
         // give him some starting units
         self.add_units(physics_state, start_n_id, (self.player_node_ids.len()-1) as PlayerId, 20);
+        // and mark the node he started on as no longer being available
+        self.nodes[usize::from(start_n_id)].cell_type = CellType::Basic;
     }
     pub fn player_node(&self, p_id: PlayerId) -> &GameNode {
         &self.nodes[usize::from(self.player_node_ids[usize::from(p_id)])]
@@ -232,7 +234,7 @@ impl GameState {
         return players_to_be_removed;
     }
     /// Returns players who have to be removed.
-    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, prox_walls: &mut Vec<Vec<EId>>, e_to_b_rem: &mut Vec<EId>) -> SmallVec<[PlayerId; 4]> {
+    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, prox_walls: &mut Vec<Vec<EId>>, e_to_b_rem: &mut Vec<EId>, n_to_be_split: &mut Vec<NId>) -> SmallVec<[PlayerId; 4]> {
         // update all nodes
         let distribute_troops   = self.check_for_troop_distribution(dt);
         let production_producer = self.check_for_unit_production_producer(dt);
@@ -254,8 +256,12 @@ impl GameState {
             }
 
             // then check for mutations and advance them
-            if node.advance_mutation(physics_state, dt, n_id as NId, unsafe {&mut *nodes_ptr}, e_to_b_rem) {
+            let (ctrl_change, split) = node.advance_mutation(physics_state, dt, n_id as NId, unsafe {&mut *nodes_ptr}, e_to_b_rem);
+            if ctrl_change {
                 control_changed_nodes.push(n_id as NId);
+            }
+            if split {
+                n_to_be_split.push(n_id as NId);
             }
 
             // if this cell is owned by the cancer player but not a cancer cell check whether you can turn it into one and do so if you can
@@ -465,6 +471,8 @@ pub enum CellType {
     /// these are the few nodes where players can start
     /// other than that they act identically to Basic nodes
     StartNode,
+    /// only to be used as a mutation, never as an actual cell type!
+    Split,
 }
 
 pub struct GameNode {
@@ -547,8 +555,8 @@ impl GameNode {
     }
 
     /// Returns whether a control change has happened in this node
-    fn advance_mutation(&mut self, physics_state: &mut PhysicsState, dt: f32, n_id: NId, g_nodes: &mut [GameNode], e_to_b_rem: &mut Vec<EId>) -> bool {
-        let mut control_change = false;
+    fn advance_mutation(&mut self, physics_state: &mut PhysicsState, dt: f32, n_id: NId, g_nodes: &mut [GameNode], e_to_b_rem: &mut Vec<EId>) -> (bool, bool) {
+        let (mut control_change, mut split) = (false, false);
         if let Some((c_type, duration_left)) = &mut self.mutating {
             *duration_left -= dt;
             if *duration_left <= 0. {
@@ -596,6 +604,10 @@ impl GameNode {
                             self.add_units(self.controlled_by, self.troop_of_player(self.controlled_by).unwrap().count);
                         }
                     }
+                    Split => {
+                        self.cell_type = Basic;
+                        split = true;
+                    }
                     _ => {}
                 }
                 // if the old state was "Wall" then update the physical wall state of all edges as well
@@ -620,7 +632,7 @@ impl GameNode {
                 }
             }
         }
-        false
+        (control_change, split)
     }
 
     /// Returns true if the player controls this node or if he has troops here
@@ -628,7 +640,7 @@ impl GameNode {
         self.controlled_by == p_id || self.troops.iter().find(|x| x.player == p_id).is_some()
     }
 
-    fn set_controlled_by(&mut self, p_id: PlayerId) {
+    pub fn set_controlled_by(&mut self, p_id: PlayerId) {
         if self.controlled_by != p_id {
             // the controlling player changed, reset the send paths and the desired unit count
             match self.cell_type {
@@ -651,7 +663,7 @@ impl GameNode {
 
     /// tries to add 'amount' units;
     /// returns how many were actually added and whether a control-change was triggered
-    fn add_units(&mut self, p_id: PlayerId, amount: UnitCount) -> (UnitCount, bool) {
+    pub fn add_units(&mut self, p_id: PlayerId, amount: UnitCount) -> (UnitCount, bool) {
         if amount == 0 { return (0, false); }
         let mut control_change = false;
         let troop = if let Some(t) = Troop::troop_of_player_mut(&mut self.troops, p_id) {

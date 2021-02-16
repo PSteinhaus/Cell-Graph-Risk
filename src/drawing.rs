@@ -114,7 +114,7 @@ impl MainState {
         let rotation = ggez::nalgebra::RealField::atan2(vec.y, vec.x);
         let nrm = vec.norm();
         let color = if use_strain {
-            lerp_colors(&BLACK, &Self::player_color_static(p_id_controlling, players), p_edge.strain(nrm))
+            lerp_colors(&(0.1, 0.1, 0.1).into(), &Self::player_color_static(p_id_controlling, players), p_edge.strain(nrm))
         } else {
             Self::player_color_static(p_id_controlling, players)
         };
@@ -217,7 +217,7 @@ impl MainState {
         }
         // just to be sure
         if s_x == f32::INFINITY {
-            (s_x, s_y, b_x, b_y) = (0., 0., 1024., 1024.);
+            return;
         }
         const BORDER: f32 = 2048.;
         let (mut w, mut h) = (b_x - s_x + (BORDER * 2.), b_y - s_y + (BORDER * 2.));
