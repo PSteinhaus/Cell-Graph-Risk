@@ -201,7 +201,7 @@ impl GameState {
             // if this fails as well then the player has lost (and is removed from the game for now)
             if searching_node {
                 // TODO: maybe check whether the player still has some travelling units left and keep him if he has
-                // if we choose to do that though, we need to change the program to respect that there can be players without a node
+                //       if we choose to do that though, we need to change the program to respect that there can be players without a node
                 return true;
             }
         }

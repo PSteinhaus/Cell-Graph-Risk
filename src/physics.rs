@@ -201,7 +201,6 @@ impl PhysicsState {
             }
             true
         }
-        // TODO: make the game state react to this by disabling all transport on that edge
     }
     /// advance the simulation dt seconds
     pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<NId>>, edges_to_be_rem: &mut Vec<EId>) {
@@ -470,7 +469,8 @@ impl Edge {
                         // find the point on the wall closest to the node
                         // (not really anymore, but at least calculate the parameter for finding it,
                         //  since we do need it to distribute the push-back)
-                        // TODO: there's quite a bit numeric instability around the joints, so maybe find a way to stabilize it
+                        // TODO: there's quite a bit numeric instability around the joints, so maybe find a way to stabilize it;
+                        //       probably a good way to do this would be to give wall cells some collision behavior for themselves;
                         let t = n_vec.x * (pos.x - node1pos.x) + n_vec.y * (pos.y - node1pos.y);
                         //let intersection = node1pos + (t * n_vec);
                         // calculate the push

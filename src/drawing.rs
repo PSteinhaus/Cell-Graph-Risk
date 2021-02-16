@@ -1,7 +1,7 @@
 use std::cmp::min;
 
 use ggez::{Context, timer};
-use ggez::graphics::{BLACK, Color, DrawParam, Rect, WHITE, set_screen_coordinates, drawable_size};
+use ggez::graphics::{BLACK, Color, DrawParam, Rect, WHITE, set_screen_coordinates, drawable_size, screen_coordinates};
 use ggez::graphics::spritebatch::SpriteBatch;
 use ggez::nalgebra::{Point2, Vector2};
 use smallvec::SmallVec;
@@ -238,9 +238,16 @@ impl MainState {
             // keep the image centered
             s_x -= (w - old_w) / 2.;
         }
-        // TODO: make the camera movement smooth in cases where there is a big instantaneous change
-        //       i.e. when a node gets added or removed to the set of player used nodes
-        let screen_coords = Rect::new(s_x - BORDER, s_y - BORDER, w, h);
+        s_x -= BORDER;
+        s_y -= BORDER;
+        // make the camera movement smooth
+        // important because there are cases where there is a big instantaneous change
+        // i.e. when a node gets added or removed to the set of player used nodes
+        let old = screen_coordinates(ctx);
+        const CAM_SPEED: f32 = 0.1;
+        (s_x, s_y) = (old.x + (s_x - old.x) * CAM_SPEED, old.y + (s_y - old.y) * CAM_SPEED);
+        (w, h)     = (old.w + (w - old.w) * CAM_SPEED, old.h + (h - old.h) * CAM_SPEED);
+        let screen_coords = Rect::new(s_x, s_y, w, h);
         set_screen_coordinates(ctx, screen_coords);
     }
 }

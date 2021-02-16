@@ -55,8 +55,6 @@ impl MainState {
             let prox_vec = &mut self.proximity_walls[e_id];
             prox_vec.clear();
             // go through all nodes and add their id to the list if they're close enough
-            // TODO: sometimes some nodes are not found by this method for some reason
-            //       if nothing helps just stop doing this and simply iterate over all nodes when calculating wall collisions
             let edge = &self.physics_state.edges[e_id];
             // but only if you're a wall (I have no need for proximity data otherwise)
             if let EdgeType::Wall = edge.e_type {
