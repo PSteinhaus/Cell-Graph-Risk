@@ -7,7 +7,7 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::{ANYONE_PLAYER, CANCER_PLAYER, PlayerId, UnitCount, NId, EId, NO_PLAYER};
 use crate::helpers::Timer;
-use crate::game_mechanics::{GameEdge, GameNode};
+use crate::game_mechanics::{GameEdge, GameNode, CellType};
 use crate::physics::PhysicsState;
 
 pub struct Fight {
@@ -555,8 +555,15 @@ impl GameEdge {
         let game_node = &mut game_nodes[usize::from(dest_n_id)];
         for adv_troop in removed_troops.into_iter() {
             let mut troop = adv_troop.troop;
-            let (added_units, control_change) = game_node.add_units(troop.player, troop.count);
-            if added_units != troop.count {
+            let mut amount_to_add= troop.count;
+            // WALL SUPERIORITY: when the player owning this wall add units to it, double the count
+            if let CellType::Wall = game_node.cell_type {
+                if game_node.controlled_by() == troop.player || troop.player == ANYONE_PLAYER {
+                    amount_to_add *= 2;
+                }
+            }
+            let (added_units, control_change) = game_node.add_units(troop.player, amount_to_add);
+            if added_units < troop.count {
                 // send the rest of this troop back home
                 troop.remove_units(added_units);
                 self.add_troop(1, troop.player, troop.count);
@@ -578,8 +585,15 @@ impl GameEdge {
         let game_node = &mut game_nodes[usize::from(dest_n_id)];
         for adv_troop in removed_troops.into_iter() {
             let mut troop = adv_troop.troop;
-            let (added_units, control_change) = game_node.add_units(troop.player, troop.count);
-            if added_units != troop.count {
+            let mut amount_to_add= troop.count;
+            // WALL SUPERIORITY: when the player owning this wall add units to it, double the count
+            if let CellType::Wall = game_node.cell_type {
+                if game_node.controlled_by() == troop.player || troop.player == ANYONE_PLAYER {
+                    amount_to_add *= 2;
+                }
+            }
+            let (added_units, control_change) = game_node.add_units(troop.player, amount_to_add);
+            if added_units < troop.count {
                 // send the rest of this troop back home
                 troop.remove_units(added_units);
                 self.add_troop(0, troop.player, troop.count);

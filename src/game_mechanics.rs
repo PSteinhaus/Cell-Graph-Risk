@@ -315,22 +315,22 @@ impl GameState {
                 if can_distribute {
                     if let Some(troop) = Troop::troop_of_player_mut(&mut node.troops, node.controlled_by) {
                         if let Some(available_units) = troop.count.checked_sub(node.desired_unit_count) {
-                            let units_to_distribute = clamp(1, 0, available_units);
+                            let units_to_distribute = if let Wall = node.cell_type {
+                                if available_units >= 2 {   // walls need to remove 2 units per unit sent
+                                    1
+                                } else {
+                                    0
+                                }
+                            } else {
+                                if available_units >= 1 {
+                                    1
+                                } else {
+                                    0
+                                }
+                            };
                             if units_to_distribute != 0 {
-                                troop.remove_units(units_to_distribute);
-                                let mut possible_e_ids: SmallVec<[EId; 16]> = /* match node.cell_type {
-                                    Cancer => { physics_state.node_at(n_id).edge_indices.iter().copied().collect() },
-                                    Producer => unsafe {
-                                        physics_state.neighbors(n_id)
-                                            .filter(|neighbor_id| match (*nodes_unchecked)[usize::from(*neighbor_id)].controlled_by() {
-                                                NO_PLAYER | ANYONE_PLAYER => false,
-                                                _ => true
-                                            })
-                                            .map(|neighbor_id| physics_state.edge_id_between(n_id, neighbor_id).unwrap())
-                                            .collect()
-                                    },
-                                    _ => */ node.troop_send_paths.iter().copied().collect();
-                                //};
+                                troop.remove_units( if let Wall = node.cell_type {2 * units_to_distribute} else {units_to_distribute});
+                                let mut possible_e_ids: SmallVec<[EId; 16]> = node.troop_send_paths.iter().copied().collect();
                                 // filter out all edges that point towards a producer, as producers may not be targeted
                                 // also filter out all edges that have already reached their maximum unit count
                                 unsafe {
@@ -473,6 +473,7 @@ pub struct GameNode {
     /// This value is cached here because fast access to it allows for optimized control-dependent operations including drawing the node.
     /// i.e. it is needed often and changes rarely
     controlled_by: PlayerId,
+    controlled_by_previously: PlayerId,
     /// how this Node acts as a cell (i.e. as a wall, as a producer, as cancer, ...)
     cell_type: CellType,
     fight: Option<Fight>,
@@ -501,6 +502,7 @@ impl GameNode {
             desired_unit_count: Self::INITIAL_DESIRED_UNIT_COUNT,
             troop_send_paths: BTreeSet::new(),
             controlled_by: NO_PLAYER,
+            controlled_by_previously: NO_PLAYER,
             cell_type: CellType::Basic,
             fight: None,
             troop_distribution_counter: 0,
@@ -585,6 +587,10 @@ impl GameNode {
                         for e_id in edges_to_turn_to_walls {
                             MainState::turn_to_wall_static(physics_state, g_nodes, e_id, e_to_b_rem);
                         }
+                        // also double the unit count (WALL SUPERIORITY) if it is controlled by a player
+                        if self.controlled_by() != NO_PLAYER {
+                            self.add_units(self.controlled_by, self.troop_of_player(self.controlled_by).unwrap().count);
+                        }
                     }
                     _ => {}
                 }
@@ -596,6 +602,16 @@ impl GameNode {
                             let edge = &mut *edge;
                             edge.turn_to_normal();
                         }
+                    }
+                    // also remove WALL SUPERIORITY (half the units)
+                    let p_id_to_half = if self.controlled_by != NO_PLAYER {
+                        self.controlled_by
+                    } else {
+                        self.controlled_by_previously
+                    };
+                    if p_id_to_half != NO_PLAYER {
+                        let p_troop = self.troop_of_player_mut(p_id_to_half).unwrap();
+                        p_troop.remove_units(p_troop.count / 2);
                     }
                 }
             }
@@ -611,19 +627,21 @@ impl GameNode {
     fn set_controlled_by(&mut self, p_id: PlayerId) {
         if self.controlled_by != p_id {
             // the controlling player changed, reset the send paths and the desired unit count
-            // TODO: think about whether I really want this
             match self.cell_type {
                 CellType::Cancer => {
                     if p_id != CANCER_PLAYER && p_id != NO_PLAYER {
                         // cancer has just been beaten, turn this cell back into a normal cell
                         self.cell_type = Basic;
-                        self.troop_send_paths.clear();
                     }
                 },
-                _ => { self.troop_send_paths.clear(); }
+                _ => {}
             }
-            self.desired_unit_count = Self::INITIAL_DESIRED_UNIT_COUNT;
+            if self.controlled_by == NO_PLAYER && self.controlled_by_previously != p_id {
+                self.troop_send_paths.clear();
+                self.desired_unit_count = Self::INITIAL_DESIRED_UNIT_COUNT;
+            }
         }
+        self.controlled_by_previously = self.controlled_by;
         self.controlled_by = p_id;
     }
 

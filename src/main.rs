@@ -689,7 +689,7 @@ impl event::EventHandler for MainState {
             // behavior depends on whether this is the current node of a player
             let (u_draw_mode, scale) =
                 if let Some(p_id) = player_on_this {
-                    const P_SCALE: f32 = 3.;
+                    const P_SCALE: f32 = 2.5;
                     // if it is, then it also depends on whether the player is currently changing the desired unit count
                     use Button::*;
                     (if self.players[p_id].pressed_for(LeftTrigger2) > 0. || self.players[p_id].pressed_for(RightTrigger2) > 0. {
@@ -701,7 +701,7 @@ impl event::EventHandler for MainState {
                         }
                     }, P_SCALE)
                 } else {
-                    const N_SCALE: f32 = 3.;
+                    const N_SCALE: f32 = 2.5;
                     (match ctrl {
                         NO_PLAYER | ANYONE_PLAYER => { NoDrawing },
                         CANCER_PLAYER => { NoDrawing }

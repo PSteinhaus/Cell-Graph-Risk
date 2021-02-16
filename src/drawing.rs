@@ -248,6 +248,6 @@ impl MainState {
         (s_x, s_y) = (old.x + (s_x - old.x) * CAM_SPEED, old.y + (s_y - old.y) * CAM_SPEED);
         (w, h)     = (old.w + (w - old.w) * CAM_SPEED, old.h + (h - old.h) * CAM_SPEED);
         let screen_coords = Rect::new(s_x, s_y, w, h);
-        set_screen_coordinates(ctx, screen_coords);
+        set_screen_coordinates(ctx, screen_coords).unwrap();
     }
 }
