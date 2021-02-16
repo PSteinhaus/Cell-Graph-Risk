@@ -456,11 +456,15 @@ pub fn can_control(p_id: PlayerId, other_p_id: PlayerId) -> bool {
 #[derive(Copy, Clone)]
 pub enum CellType {
     Basic,
-    Propulsion(f32, f32),    // holds the unit consumption (meaning when this value is >=1 a unit/units have to be removed)
-                             // and the current angle of the node
+    /// holds the unit consumption (meaning when this value is >=1 a unit/units have to be removed)
+    /// and the current angle of the node
+    Propulsion(f32, f32),
     Wall,
     Cancer,
     Producer /*{ prod_rate: f32 }*/,
+    /// these are the few nodes where players can start
+    /// other than that they act identically to Basic nodes
+    StartNode,
 }
 
 pub struct GameNode {

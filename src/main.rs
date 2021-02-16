@@ -229,25 +229,40 @@ impl MainState {
         &mut self.players[usize::from(id)]
     }
 
-    fn add_player(&mut self, gamepad_id: GamepadId, color: Color) {
+    fn add_player(&mut self, gamepad_id: GamepadId, color: Color) -> bool {
         println!("adding player with GamepadId {:?}", gamepad_id);
-        self.players.push(PlayerState::new(gamepad_id, color));
         let mut rng = thread_rng();
-        // for now choose a random node for the player to start on
-        let start_n_id = rng.gen_range(0, self.node_count() as NId);
-        self.game_state.add_player(start_n_id, &self.physics_state);
+        // for now choose a random StartNode node for the player to start on
+        // so collect these n_ids first
+        let start_n_ids: SmallVec<[NId; 32]> = self.game_state.nodes.iter()
+            .enumerate()
+            .filter(|(_n_id, node)| if let CellType::StartNode = node.cell_type() { true } else { false })
+            .map(|(n_id, _node)| n_id as NId)
+            .collect();
+        if start_n_ids.len() != 0 {
+            self.players.push(PlayerState::new(gamepad_id, color));
+            let i = rng.gen_range(0, start_n_ids.len());
+            let start_n_id = start_n_ids[i];
+            self.game_state.add_player(start_n_id, &self.physics_state);
+            return true;
+        } else {
+            return false;
+        }
     }
 
-    fn identify_or_add_player(&mut self, gamepad_id: GamepadId) -> PlayerId {
+    fn identify_or_add_player(&mut self, gamepad_id: GamepadId) -> Option<PlayerId> {
         // identify the player
         let mut player_id = self.player_id_using(gamepad_id);
         // if there is no player using this gamepad add one
         if player_id == NO_PLAYER {
             let rgb = thread_rng().gen::<(u8,u8,u8)>();    // choose a random color
-            self.add_player(gamepad_id, Color::from(rgb));
-            player_id = (self.players.len() - 1) as PlayerId;
+            if self.add_player(gamepad_id, Color::from(rgb)) {
+                player_id = (self.players.len() - 1) as PlayerId;
+            } else {
+                return None
+            }
         }
-        player_id
+        Some(player_id)
     }
 
     fn player_node(&self, id: PlayerId) -> &Node {
@@ -748,7 +763,12 @@ impl event::EventHandler for MainState {
     }
 
     fn gamepad_button_down_event(&mut self, _ctx: &mut Context, btn: Button, id: GamepadId) {
-        let player_id = self.identify_or_add_player(id);
+        let player_id;
+        if let Some(p_id) = self.identify_or_add_player(id) {
+            player_id = p_id;
+        } else {
+            return; // player couldn't be added
+        };
         use Button::*;
         // plan for control layout:
         match btn {
@@ -824,7 +844,12 @@ impl event::EventHandler for MainState {
     }
 
     fn gamepad_button_up_event(&mut self, _ctx: &mut Context, btn: Button, id: GamepadId) {
-        let player_id = self.identify_or_add_player(id);
+        let player_id;
+        if let Some(p_id) = self.identify_or_add_player(id) {
+            player_id = p_id;
+        } else {
+            return; // player couldn't be added
+        };
         let player = &self.players[usize::from(player_id)];
         let mut player_removed = false;
         use Button::*;
@@ -913,6 +938,9 @@ pub fn main() -> GameResult {
     }
     for _ in 0..2 {
         state.add_node_of_type(Point2::new(rng.gen_range(100.0, 3740.0), rng.gen_range(100.0, 2060.0)), CellType::Producer);
+    }
+    for _ in 0..2 {
+        state.add_node_of_type(Point2::new(rng.gen_range(100.0, 3740.0), rng.gen_range(100.0, 2060.0)), CellType::StartNode);
     }
     //state.add_node(Point2::new(0.0, 0.0));
     /*
