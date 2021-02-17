@@ -8,7 +8,7 @@ use fighting::{AdvancingTroop, EdgeFight, Fight, Troop};
 use crate::{ANYONE_PLAYER, CANCER_PLAYER, EId, MainState, MAX_UNIT_COUNT, NId, NO_PLAYER, PlayerId, UnitCount, PlayerState};
 use crate::game_mechanics::CellType::Basic;
 use crate::helpers::*;
-use crate::physics::{PhysicsState, EMPTY_NODE_MASS};
+use crate::physics::{PhysicsState, EMPTY_NODE_MASS, EMPTY_NODE_RADIUS};
 use crate::proximity::proximity_nodes;
 
 pub mod fighting;
@@ -309,7 +309,8 @@ impl GameState {
 
             // update physical node mass and
             physics_state.nodes[n_id].mass = node.calc_mass();
-            // TODO: update physical node radius
+            // update physical node radius
+            physics_state.nodes[n_id].radius = node.calc_radius();
         }
         // manage unit distribution
         // let cells distribute troops to their chosen edges
@@ -669,6 +670,11 @@ impl GameNode {
 
     pub fn calc_mass(&self) -> f32 {
         EMPTY_NODE_MASS + self.unit_count() as f32 * MASS_PER_UNIT
+    }
+
+    pub fn calc_radius(&self) -> f32 {
+        const RAD_SCALE_FACTOR: f32 = 10.0;
+        EMPTY_NODE_RADIUS + (self.unit_count() as f32).sqrt() * RAD_SCALE_FACTOR
     }
 
     pub fn unit_count(&self) -> u16 {

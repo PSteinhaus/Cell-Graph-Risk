@@ -10,7 +10,7 @@ use ggez::timer;
 use ggez::{Context, GameResult};
 use std::env;
 use std::path;
-use crate::physics::{PhysicsState, Node, EdgeType};
+use crate::physics::{PhysicsState, Node, EdgeType, EMPTY_NODE_RADIUS};
 use crate::game_mechanics::*;
 use rand::{Rng, thread_rng};
 use ggez::graphics::{Rect, Image, DrawParam, Color, WHITE, BLACK};
@@ -739,9 +739,10 @@ impl event::EventHandler for MainState {
 
         // Draw the player positions
         for (i, player) in self.players.iter().enumerate() {
-            let p = self.draw_param_node(self.game_state.player_node_ids[i], ctx)
-                .scale(Vector2::new(1.5, 1.5))
+            let mut p = self.draw_param_node(self.game_state.player_node_ids[i], ctx)
                 .color(if let NodeEdgeOrNothing::Node = player.current_removal_type() { BLACK } else { WHITE } );
+            let bg_scale = (1. + (0.5 / p.scale.x)) * p.scale.x;
+            p.scale = [bg_scale, bg_scale].into();
             self.spr_b_node.add(p);
         }
         // Fill the nodes spritebatch
@@ -751,15 +752,15 @@ impl event::EventHandler for MainState {
             if let None = player_on_this {
                 if let CellType::Wall = c_type {} else {
                     // draw the background
-                    // TODO: instead of using scale here better use some prepared sprites
-                    let scale = match c_type {
-                        CellType::Cancer => Vector2::new(1.65, 1.65),
-                        CellType::Propulsion(_,_) => Vector2::new(1.65, 1.65),
-                        _ => Vector2::new(1.55, 1.55),
-                    };
-                    let p = self.draw_param_node(i as NId, ctx)
-                        .scale(scale)
+                    // TODO: instead of using scale here better use some prepared sprites (utilize offset to make it look better...)
+                    let mut p = self.draw_param_node(i as NId, ctx)
                         .color(Self::color_bg());
+                    let bg_scale = p.scale.x * (1. + (match c_type {
+                        CellType::Cancer => 0.65,
+                        CellType::Propulsion(_,_) => 0.65,
+                        _ => 0.55,
+                    }) / p.scale.x);
+                    p.scale = [bg_scale, bg_scale].into();
                     self.spr_b_node.add(p);
                 }
             }
@@ -777,7 +778,7 @@ impl event::EventHandler for MainState {
             let ctrl = g_node.controlled_by();
             use UnitCountDrawMode::*;
             // behavior depends on whether this is the current node of a player
-            let (u_draw_mode, scale) =
+            let (u_draw_mode, mut scale) =
                 if let Some(p_id) = player_on_this {
                     const P_SCALE: f32 = 2.5;
                     // if it is, then it also depends on whether the player is currently changing the desired unit count
@@ -798,6 +799,7 @@ impl event::EventHandler for MainState {
                         p_id => { self.players[usize::from(p_id)].unit_count_draw_mode }
                     }, N_SCALE)
                 };
+            scale *= (node.radius / EMPTY_NODE_RADIUS).sqrt();
 
             match u_draw_mode {
                 NoDrawing => {},
@@ -1001,7 +1003,7 @@ pub fn main() -> GameResult {
         )
         .window_setup(
             conf::WindowSetup::default().samples(
-                conf::NumSamples::from_u32(2)
+                conf::NumSamples::from_u32(4)
                     .expect("Option msaa needs to be 1, 2, 4, 8 or 16!"),
             ),
         );

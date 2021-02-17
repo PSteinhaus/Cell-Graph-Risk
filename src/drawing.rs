@@ -10,7 +10,7 @@ use crate::{ANYONE_PLAYER, CANCER_PLAYER, MainState, NId, NO_PLAYER, PlayerId, P
 use crate::game_mechanics::{CellType, GameEdge, GameNode};
 use crate::game_mechanics::fighting::Troop;
 use crate::helpers::lerp_colors;
-use crate::physics::{Edge, PhysicsState, Node, EdgeType};
+use crate::physics::{Edge, PhysicsState, Node, EdgeType, EMPTY_NODE_RADIUS};
 
 impl MainState {
     pub fn battle_color<'a, I: Iterator<Item = &'a Troop>>(&self, ctx: &Context, troop_iter: I) -> Color {
@@ -79,10 +79,12 @@ impl MainState {
         let node = self.physics_state.node_at(n_id);
         let g_node = &self.game_state.nodes[usize::from(n_id)];
         let ctrl = g_node.controlled_by();
+        let scale = node.radius / EMPTY_NODE_RADIUS;
         let mut p = DrawParam::new()
             .offset(Point2::new(0.5, 0.5))
             .dest(Point2::new(node.position.x, node.position.y))
-            .color(if g_node.fighting() { Self::battle_color_static(&self.players, ctx, g_node.troop_iter()) } else { self.player_color(ctrl) });
+            .color(if g_node.fighting() { Self::battle_color_static(&self.players, ctx, g_node.troop_iter()) } else { self.player_color(ctrl) })
+            .scale([scale, scale]);
 
         let c_type = g_node.cell_type();
         p.src = self.draw_source_rect(&c_type);
@@ -122,6 +124,7 @@ impl MainState {
         Self::draw_param_edge_static(
             edge,
             node1.position,
+            node1.radius + node2.radius,
             vec,
             self.edge_sprite_width,
             p_id_controlling,
@@ -130,11 +133,11 @@ impl MainState {
         )
     }
 
-    pub fn draw_param_edge_static(p_edge: &Edge, pos: Point2<f32>, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState], use_strain: bool) -> DrawParam {
+    pub fn draw_param_edge_static(p_edge: &Edge, pos: Point2<f32>, radii_comb: f32, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState], use_strain: bool) -> DrawParam {
         let rotation = ggez::nalgebra::RealField::atan2(vec.y, vec.x);
         let nrm = vec.norm();
         let color = if use_strain {
-            lerp_colors(&(0.1, 0.1, 0.1).into(), &Self::player_color_static(p_id_controlling, players), p_edge.strain(nrm))
+            lerp_colors(&(0.1, 0.1, 0.1).into(), &Self::player_color_static(p_id_controlling, players), p_edge.strain(nrm - radii_comb))
         } else {
             Self::player_color_static(p_id_controlling, players)
         };
@@ -192,6 +195,7 @@ impl MainState {
         spr_batch_edge.add(Self::draw_param_edge_static(
             edge,
             node1.position,
+            node1.radius + node2.radius,
             vec,
             spr_width,
             g_edge.controlled_by(),

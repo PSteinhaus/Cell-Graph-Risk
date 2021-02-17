@@ -8,6 +8,7 @@ use std::cmp::min;
 
 const SPRING_CONST: f32 = 2.0;
 pub(crate) const EMPTY_NODE_MASS: f32 = 10.0;
+pub(crate) const EMPTY_NODE_RADIUS: f32 = 64.;
 const NODE_FRICTION_FACTOR: f32 = 0.9995;
 const TENSION_FACTOR: f32 = 0.8; // = relaxed_length / distance between nodes
 
@@ -259,6 +260,7 @@ pub struct Node {
     velocity: Vector2<f32>,
     pub(crate) edge_indices: Vec<EId>,
     pub(crate) mass: f32,
+    pub(crate) radius: f32,
 }
 
 impl PartialEq for Node {
@@ -297,6 +299,7 @@ impl Node {
             velocity: Vector2::new(0.0, 0.0),
             edge_indices: Vec::new(),
             mass: EMPTY_NODE_MASS,
+            radius: EMPTY_NODE_RADIUS,
         }
     }
     fn add_edge(&mut self, edge_index: EId) {
@@ -407,12 +410,12 @@ impl Edge {
     }
 
     /// reaches 1 when the length differs from the relaxed length by a certain percentage
-    pub fn strain(&self, current_length: f32) -> f32 {
-        Self::strain_static(current_length / self.relaxed_length, self.is_wall())
+    pub fn strain(&self, current_length_without_radii: f32) -> f32 {
+        Self::strain_static(current_length_without_radii / self.relaxed_length, self.is_wall())
     }
     /// reaches 1 when the length differs from the relaxed length by a certain percentage
-    pub fn strain_static(ratio_length_to_relaxed_length: f32, is_wall: bool) -> f32 {
-        (ratio_length_to_relaxed_length - 1.).abs() * if is_wall { 2.5 } else { 1.5 }
+    pub fn strain_static(ratio_length_with_radii_to_relaxed_length: f32, is_wall: bool) -> f32 {
+        (ratio_length_with_radii_to_relaxed_length - 1.).abs() * if is_wall { 2.5 } else { 1.5 }
     }
 
     /// Returns true if the strain is too great and the edge has to be removed.
@@ -422,8 +425,9 @@ impl Edge {
         let (node1pos, node2pos) = unsafe { ((*node1).position, (*node2).position) };
         let vec: Vector2<f32> = node2pos - node1pos; // vector from node1 to node2
         let vec_norm = norm(&vec);
+        let vec_norm_with_radii = vec_norm - unsafe { ((*node1).radius + (*node2).radius) }; // remove the node radii from the norm
         // first check the strain and cut this edge if it's too much
-        let ratio = vec_norm / self.relaxed_length;
+        let ratio = vec_norm_with_radii / self.relaxed_length;
         let is_wall = self.is_wall();
         if Self::strain_static(ratio, is_wall) >= 1. {
             // the strain is too big, cut this edge
@@ -433,7 +437,7 @@ impl Edge {
         } else {
             let n_vec: Vector2<f32> = vec / vec_norm;
             // walls are stronger, meaning the force which they exert is stronger
-            let mut scalar_force = (ratio - 1.) * combined_factor * 1024. * if is_wall { 8. } else { 2. };   // new elastic force
+            let mut scalar_force = (ratio - 1.) * combined_factor * 1024. * if is_wall { 4. } else { 1. };   // new elastic force
             // add a force working against the current change of edge length
             let vel_change: Vector2<f32> = unsafe { (*node2).velocity - (*node1).velocity };   // relative velocity from node1 to node2
             // calculate the component parallel to this edge
@@ -454,11 +458,10 @@ impl Edge {
                     let unnormalized_perp: Vector2<f32> = [x, x * (-n_vec.x) / n_vec.y].into();
                     unnormalized_perp / unnormalized_perp.norm()
                 };
-                // TODO: as soon as dynamic radius comes into play this has to be changed
-                const RADIUS: f32 = 64.;
-                let perp_with_rad = perp * RADIUS;
+
                 for n_id in prox_wall.iter() {
                     let node = &mut nodes[usize::from(*n_id)];
+                    let perp_with_rad = perp * node.radius;
                     // the problem of the approach used here is that once a node manages to cross the wall
                     // it will not be pushed out again (on the contrary, it will be pushed in!)
                     // this only becomes a problem when nodes are moving at high velocities though
@@ -487,7 +490,7 @@ impl Edge {
                         //let intersection = node1pos + (t * n_vec);
                         // calculate the push
                         // this actually needs quite a bit of fine tuning to work correctly
-                        let push = -perp_facing_the_wall * combined_factor * (16. + velocity_factor * 4.);
+                        let push = -perp_facing_the_wall * combined_factor * (8. + velocity_factor * 4.);
                         //println!("t: {}", t);
                         //println!("push:  {:?}", push);
                         //println!("start: {:?}", node1pos);
