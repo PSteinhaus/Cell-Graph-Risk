@@ -204,17 +204,17 @@ impl PhysicsState {
         }
     }
     /// advance the simulation dt seconds
-    pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<NId>>, edges_to_be_rem: &mut Vec<EId>) {
+    pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<NId>>, edges_to_be_rem: &mut Vec<EId>, unmoveable_nodes: usize, unchangeable_edges: usize) {
         // calculate the node forces
         // also remove all edges for which the strain is too great
         for (e_id, edge) in self.edges.iter_mut().enumerate() {
-            if edge.calc_force(&mut self.nodes, &prox_walls[e_id], dt) {
+            if edge.calc_force(&mut self.nodes, &prox_walls[e_id], dt, e_id < unchangeable_edges) {
                 edges_to_be_rem.push(e_id as EId);
             }
         }
         // apply them to the nodes and actually move them
         //let nodes_prt = &self.nodes as *const Vec<Node>;
-        for (i, node) in self.nodes.iter_mut().enumerate() {
+        for (i, node) in self.nodes.iter_mut().skip(unmoveable_nodes).enumerate() {
             // first save the old position
             //let old_pos = node.position;
             node.apply_forces(&self.edges, i as NId);
@@ -419,7 +419,7 @@ impl Edge {
     }
 
     /// Returns true if the strain is too great and the edge has to be removed.
-    fn calc_force(&mut self, nodes: &mut Vec<Node>, prox_wall: &Vec<NId>, dt: f32) -> bool {
+    fn calc_force(&mut self, nodes: &mut Vec<Node>, prox_wall: &Vec<NId>, dt: f32, is_unchangeable: bool) -> bool {
         let combined_factor = dt * SPRING_CONST / 2.;
         let (node1, node2) = (&mut nodes[usize::from(self.node_indices[0])] as *mut Node, &mut nodes[usize::from(self.node_indices[1])] as *mut Node);
         let (node1pos, node2pos) = unsafe { ((*node1).position, (*node2).position) };
@@ -429,7 +429,7 @@ impl Edge {
         // first check the strain and cut this edge if it's too much
         let ratio = vec_norm_with_radii / self.relaxed_length;
         let is_wall = self.is_wall();
-        if Self::strain_static(ratio, is_wall) >= 1. {
+        if !is_unchangeable && Self::strain_static(ratio, is_wall) >= 1. {
             // the strain is too big, cut this edge
             // also set the current force to 0 so that this edge will be ignored when calculating the node forces
             self.velocity_change = [0., 0.].into();

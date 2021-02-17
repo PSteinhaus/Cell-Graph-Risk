@@ -236,7 +236,7 @@ impl GameState {
         return players_to_be_removed;
     }
     /// Returns players who have to be removed.
-    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, prox_walls: &mut Vec<Vec<EId>>, e_to_b_rem: &mut Vec<EId>, n_to_be_split: &mut Vec<NId>) -> SmallVec<[PlayerId; 4]> {
+    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, prox_walls: &mut Vec<Vec<EId>>, e_to_b_rem: &mut Vec<EId>, n_to_be_split: &mut Vec<NId>, unchangeable_nodes: usize, unchangeable_edges: &mut usize) -> SmallVec<[PlayerId; 4]> {
         // update all nodes
         let distribute_troops   = self.check_for_troop_distribution(dt);
         let production_producer = self.check_for_unit_production_producer(dt);
@@ -271,7 +271,7 @@ impl GameState {
                 match node.cell_type {
                     Cancer => {},
                     _ => {
-                        node.try_start_mutation(Cancer);
+                        node.try_start_mutation(Cancer, n_id < unchangeable_nodes);
                     }
                 }
             }
@@ -306,11 +306,13 @@ impl GameState {
                 },
                 _ => {}
             }
-
-            // update physical node mass and
-            physics_state.nodes[n_id].mass = node.calc_mass();
-            // update physical node radius
-            physics_state.nodes[n_id].radius = node.calc_radius();
+            // for all but the unchangeable nodes:
+            if n_id >= unchangeable_nodes {
+                // update physical node mass and
+                physics_state.nodes[n_id].mass = node.calc_mass();
+                // update physical node radius
+                physics_state.nodes[n_id].radius = node.calc_radius();
+            }
         }
         // manage unit distribution
         // let cells distribute troops to their chosen edges
@@ -384,7 +386,7 @@ impl GameState {
         // try to add edges
         for (source_n_id, target_n_id) in edges_to_try_add {
             println!("trying to add cancer edge");
-            MainState::try_add_edge(self, physics_state, source_n_id, target_n_id, prox_walls);
+            MainState::try_add_edge(self, physics_state, source_n_id, target_n_id, prox_walls, unchangeable_edges);
         }
         // update all edges
         for (e_id, edge) in self.edges.iter_mut().enumerate() {
@@ -541,8 +543,9 @@ impl GameNode {
         g_node
     }
     /// Returns whether this node can currently mutate into a given type.
-    pub fn can_mutate(&self, cell_type: &CellType) -> bool {
-        return self.controlled_by != NO_PLAYER  // there needs to be clear control to decide who pays
+    pub fn can_mutate(&self, cell_type: &CellType, is_unchangeable: bool) -> bool {
+        return !is_unchangeable
+            && self.controlled_by != NO_PLAYER  // there needs to be clear control to decide who pays
             && self.mutating.is_none()  // there may not be any other mutation currently running
             && std::mem::discriminant(&self.cell_type) != std::mem::discriminant(cell_type) // one may not mutate a cell into the same type it currently has
             && self.troop_of_player(self.controlled_by).unwrap().count >= mutation_cost(cell_type) + 1  // and the cost must be payable
@@ -553,8 +556,8 @@ impl GameNode {
         self.troop_of_player_mut(self.controlled_by).unwrap().remove_units(mutation_cost(&cell_type));
     }
 
-    pub fn try_start_mutation(&mut self, cell_type: CellType) -> bool {
-        if self.can_mutate(&cell_type) {
+    pub fn try_start_mutation(&mut self, cell_type: CellType, is_unchangeable: bool) -> bool {
+        if self.can_mutate(&cell_type, is_unchangeable) {
             self.start_mutation(cell_type);
             return true;
         }

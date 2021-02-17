@@ -115,6 +115,7 @@ impl MainState {
         self.draw_param_edge_from_n_ids(edge.node_indices, g_edge.controlled_by())
     }
 
+    /// WARNING: only used for drawing the edge selection currently; some things are hardcoded for this special use right now;
     pub fn draw_param_edge_from_n_ids(&self, n_ids: [NId; 2], p_id_controlling: PlayerId) -> DrawParam {
         let (node1, node2) = (self.physics_state.node_at(n_ids[0]), self.physics_state.node_at(n_ids[1]));
         let e_id = self.physics_state.edge_id_between(n_ids[0], n_ids[1]).unwrap();
@@ -129,11 +130,12 @@ impl MainState {
             self.edge_sprite_width,
             p_id_controlling,
             &self.players,
-            false
+            false,
+            self.is_unchangeable_edge(e_id)
         )
     }
 
-    pub fn draw_param_edge_static(p_edge: &Edge, pos: Point2<f32>, radii_comb: f32, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState], use_strain: bool) -> DrawParam {
+    pub fn draw_param_edge_static(p_edge: &Edge, pos: Point2<f32>, radii_comb: f32, vec: Vector2<f32>, spr_width: f32, p_id_controlling: PlayerId, players: &[PlayerState], use_strain: bool, unchangeable: bool) -> DrawParam {
         let rotation = ggez::nalgebra::RealField::atan2(vec.y, vec.x);
         let nrm = vec.norm();
         let color = if use_strain {
@@ -146,7 +148,7 @@ impl MainState {
             .src(Self::edge_src_rect(p_edge))
             .dest(Point2::new(pos.x, pos.y))
             .rotation(rotation)
-            .scale(Vector2::new(nrm / spr_width, 1.0))
+            .scale(Vector2::new(nrm / spr_width, if unchangeable { 2. } else { 1. }))
             .color(color)
     }
 
@@ -187,7 +189,8 @@ impl MainState {
                  edge: &Edge,
                  g_edge: &GameEdge,
                  g_nodes: &[GameNode],
-                 spr_b_node_dim: (u16, u16))
+                 spr_b_node_dim: (u16, u16),
+                 is_unchangeable: bool)
     {
         let (node1, node2) = (physics_state.node_at(edge.node_indices[0]),physics_state.node_at(edge.node_indices[1]));
         let vec: Vector2<f32> = node2.position - node1.position;
@@ -200,7 +203,8 @@ impl MainState {
             spr_width,
             g_edge.controlled_by(),
             players,
-            true
+            !is_unchangeable,
+            is_unchangeable
         ));
         let src_rect = Self::draw_source_rect_static(&CellType::Basic, spr_b_node_dim);
         // calculate the troop positions based on the starting point of the edge and the advancement of the troops
