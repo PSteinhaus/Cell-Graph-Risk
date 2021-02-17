@@ -401,7 +401,7 @@ impl MainState {
                             if norm > BOOST_DEADZONE {
                                 let angle = y.atan2(x);
                                 // calculate the boost intensity
-                                let boost = norm / 2.5;
+                                let boost = norm * 2.5;
                                 // calculate the consumption of units that this boost causes
                                 let new_consumption = *consumption /*+ (boost / 10.)*/; // TODO: reenable this when debugging stops
                                 // check if the consumption need can be met
@@ -415,8 +415,8 @@ impl MainState {
                                         *current_angle = angle;
                                         // now that the cost has been payed boost the node
                                         let player_n_id = usize::from(self.game_state.player_node_ids[player_id]) as NId;
-                                        let vel_change = Vector2::new(boost * angle.cos(), boost * angle.sin());
-                                        self.physics_state.node_at_mut(player_n_id).add_velocity(vel_change);
+                                        let force = Vector2::new(boost * angle.cos(), boost * angle.sin());
+                                        self.physics_state.node_at_mut(player_n_id).apply_force(force);
                                     }
                                 }
                             }

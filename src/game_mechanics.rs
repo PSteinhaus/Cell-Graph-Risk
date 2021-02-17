@@ -8,10 +8,12 @@ use fighting::{AdvancingTroop, EdgeFight, Fight, Troop};
 use crate::{ANYONE_PLAYER, CANCER_PLAYER, EId, MainState, MAX_UNIT_COUNT, NId, NO_PLAYER, PlayerId, UnitCount, PlayerState};
 use crate::game_mechanics::CellType::Basic;
 use crate::helpers::*;
-use crate::physics::PhysicsState;
+use crate::physics::{PhysicsState, EMPTY_NODE_MASS};
 use crate::proximity::proximity_nodes;
 
 pub mod fighting;
+
+const MASS_PER_UNIT: f32 = 0.1;
 
 pub struct GameState {
     /// on which node each player currently is
@@ -304,6 +306,10 @@ impl GameState {
                 },
                 _ => {}
             }
+
+            // update physical node mass and
+            physics_state.nodes[n_id].mass = node.calc_mass();
+            // TODO: update physical node radius
         }
         // manage unit distribution
         // let cells distribute troops to their chosen edges
@@ -659,6 +665,14 @@ impl GameNode {
         }
         self.controlled_by_previously = self.controlled_by;
         self.controlled_by = p_id;
+    }
+
+    pub fn calc_mass(&self) -> f32 {
+        EMPTY_NODE_MASS + self.unit_count() as f32 * MASS_PER_UNIT
+    }
+
+    pub fn unit_count(&self) -> u16 {
+        self.troops.iter().map(|t| u16::from(t.count)).sum()
     }
 
     /// tries to add 'amount' units;

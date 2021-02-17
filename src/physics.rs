@@ -7,9 +7,9 @@ use crate::game_mechanics::GameState;
 use std::cmp::min;
 
 const SPRING_CONST: f32 = 2.0;
-const NODE_MASS: f32 = 20.0;    // constant for now
-const NODE_FRICTION_FACTOR: f32 = 0.99;
-const TENSION_FACTOR: f32 = 0.75; // = relaxed_length / distance between nodes
+pub(crate) const EMPTY_NODE_MASS: f32 = 10.0;
+const NODE_FRICTION_FACTOR: f32 = 0.9995;
+const TENSION_FACTOR: f32 = 0.8; // = relaxed_length / distance between nodes
 
 pub struct PhysicsState {
     pub nodes: Vec<Node>,
@@ -204,11 +204,10 @@ impl PhysicsState {
     }
     /// advance the simulation dt seconds
     pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<NId>>, edges_to_be_rem: &mut Vec<EId>) {
-        let combined_factor = dt * SPRING_CONST / NODE_MASS;
         // calculate the node forces
         // also remove all edges for which the strain is too great
         for (e_id, edge) in self.edges.iter_mut().enumerate() {
-            if edge.calc_force(&mut self.nodes, combined_factor, &prox_walls[e_id], dt) {
+            if edge.calc_force(&mut self.nodes, &prox_walls[e_id], dt) {
                 edges_to_be_rem.push(e_id as EId);
             }
         }
@@ -259,6 +258,7 @@ pub struct Node {
     pub(crate) position: Point2<f32>,
     velocity: Vector2<f32>,
     pub(crate) edge_indices: Vec<EId>,
+    pub(crate) mass: f32,
 }
 
 impl PartialEq for Node {
@@ -296,6 +296,7 @@ impl Node {
             position: pos,
             velocity: Vector2::new(0.0, 0.0),
             edge_indices: Vec::new(),
+            mass: EMPTY_NODE_MASS,
         }
     }
     fn add_edge(&mut self, edge_index: EId) {
@@ -310,10 +311,13 @@ impl Node {
     fn apply_forces(&mut self, edges: &Vec<Edge>, node_index: NId) {
         // first apply friction
         self.velocity *= NODE_FRICTION_FACTOR;
-        // then apply the spring forces
+        // then apply the elastic edge forces
         for i in self.edge_indices.iter() {
-            self.velocity += edges[usize::from(*i)].force_step(node_index);
+            self.velocity += edges[usize::from(*i)].force_step(node_index) / self.mass;
         }
+    }
+    pub(crate) fn apply_force(&mut self, force: Vector2<f32>) {
+        self.velocity += force / self.mass;
     }
     fn apply_velocity(&mut self) {
         self.position += self.velocity;
@@ -412,7 +416,8 @@ impl Edge {
     }
 
     /// Returns true if the strain is too great and the edge has to be removed.
-    fn calc_force(&mut self, nodes: &mut Vec<Node>, combined_factor: f32, prox_wall: &Vec<NId>, dt: f32) -> bool {
+    fn calc_force(&mut self, nodes: &mut Vec<Node>, prox_wall: &Vec<NId>, dt: f32) -> bool {
+        let combined_factor = dt * SPRING_CONST / 2.;
         let (node1, node2) = (&mut nodes[usize::from(self.node_indices[0])] as *mut Node, &mut nodes[usize::from(self.node_indices[1])] as *mut Node);
         let (node1pos, node2pos) = unsafe { ((*node1).position, (*node2).position) };
         let vec: Vector2<f32> = node2pos - node1pos; // vector from node1 to node2
@@ -426,10 +431,17 @@ impl Edge {
             self.velocity_change = [0., 0.].into();
             return true;
         } else {
-            // walls are stronger, meaning the force which they exert is stronger
-            let scalar_force = (ratio - 1.) * combined_factor * 1024. * if is_wall { 4. } else { 1. };   // new elastic force
-            //let scalar_force = (vec_norm - self.relaxed_length) * if is_wall { combined_factor * 8. } else { combined_factor }; // old spring based force
             let n_vec: Vector2<f32> = vec / vec_norm;
+            // walls are stronger, meaning the force which they exert is stronger
+            let mut scalar_force = (ratio - 1.) * combined_factor * 1024. * if is_wall { 8. } else { 2. };   // new elastic force
+            // add a force working against the current change of edge length
+            let vel_change: Vector2<f32> = unsafe { (*node2).velocity - (*node1).velocity };   // relative velocity from node1 to node2
+            // calculate the component parallel to this edge
+            let parallel_comp = n_vec.dot(&vel_change); // positive means they're moving towards each other, negative means away from another
+            // and then add a force working against it
+            const EDGE_FRICTION_FACTOR: f32 = 0.05; // it's beautiful how well this works: try setting it to 1 and observe the incredible stability created by it :)
+            scalar_force += parallel_comp * EDGE_FRICTION_FACTOR;
+            //let scalar_force = (vec_norm - self.relaxed_length) * if is_wall { combined_factor * 8. } else { combined_factor }; // old spring based force
             self.velocity_change = n_vec * scalar_force;
             // if you're a wall apply force to all trespassing nodes (and your nodes as well)
             if is_wall {
@@ -483,15 +495,15 @@ impl Edge {
                         //println!("pos:   {:?}", pos);
                         //println!("intersection: {:?}", intersection);
                         // and add it to the velocity of the node (thereby pushing it straight away from the wall)
-                        node.velocity += push;
+                        node.apply_force(push);
                         // now apply the inverted push to the nodes of the wall
                         // for that calculate how much of it each will get
                         let n2_factor: f32 = t.abs() / vec_norm;
                         let n1_factor: f32 = 1. - n2_factor;
                         // and then apply it
                         unsafe {
-                            (*node1).velocity -= push * n1_factor;
-                            (*node2).velocity -= push * n2_factor;
+                            (*node1).apply_force(-push * n1_factor);
+                            (*node2).apply_force(-push * n2_factor);
                         }
                     }
                 }
