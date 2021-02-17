@@ -316,8 +316,16 @@ impl MainState {
         let mut player_id = self.player_id_using(gamepad_id);
         // if there is no player using this gamepad add one
         if player_id == NO_PLAYER {
-            let rgb = thread_rng().gen::<(u8,u8,u8)>();    // choose a random color
-            if self.add_player(gamepad_id, Color::from(rgb)) {
+            let mut pl_color = Color::new(0., 0., 0., 1.);
+            for _ in 0..100 {   // try at best a hundred times
+                let rgb = thread_rng().gen::<(u8,u8,u8)>();    // choose a random color
+                pl_color = Color::from(rgb);
+                if Self::color_allowed(&self.players, &pl_color) {
+                    println!("allowed color found");
+                    break;
+                }
+            }
+            if self.add_player(gamepad_id, pl_color) {
                 player_id = (self.players.len() - 1) as PlayerId;
             } else {
                 return None
@@ -660,9 +668,9 @@ impl event::EventHandler for MainState {
         const DESIRED_DELTA: f32 = 1.0 / (DESIRED_SIMULATION_FPS as f32);
         while timer::check_update_time(ctx, DESIRED_SIMULATION_FPS) {
             let secs = dt.as_secs_f32();
-            let ratio = (DESIRED_DELTA / secs) * thread_rng().gen_range(0.997, 1.003);  // this is for some added randomness because it had
-                                                                                                    // a nice effect back when edges were spring based
-                                                                                                    // TODO: check if it's still a plus or can be removed
+            let ratio = (DESIRED_DELTA / secs) * thread_rng().gen_range(0.997, 1.003);  // this is for some added randomness because it has
+                                                                                                    // a nice effect, that is utterly empirical and hard to explain
+                                                                                                    // just comment out the random factor to see it for yourself
             let dur = ratio * secs;
             // update the game state
             let mut edges_to_be_removed = Vec::<EId>::new();

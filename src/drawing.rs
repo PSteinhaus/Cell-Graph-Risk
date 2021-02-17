@@ -1,4 +1,4 @@
-use std::cmp::min;
+use std::cmp::{min, max};
 
 use ggez::{Context, timer};
 use ggez::graphics::{BLACK, Color, DrawParam, Rect, WHITE, set_screen_coordinates, drawable_size, screen_coordinates};
@@ -53,6 +53,26 @@ impl MainState {
             CANCER_PLAYER => BLACK,
             other_id => players[usize::from(other_id)].color
         }
+    }
+
+    pub fn color_allowed(pl_states: &Vec<PlayerState>, color: &Color) -> bool {
+        // make sure the color isn't too dark
+        if color.r + color.g + color.b < 0.75 { return false; }
+        const MIN_MAX: f32 = 0.6;
+        if color.r < MIN_MAX && color.g < MIN_MAX && color.b < MIN_MAX { return false; }
+        // make sure the color isn't too gray
+        let middle = (color.r + color.g + color.b) / 3.;
+        let total_distance = (color.r - middle).abs() + (color.g - middle).abs() + (color.b - middle).abs();
+        if total_distance < 0.25 { return false; }
+        // make sure it isn't too white
+        let total_distance = (color.r - 1.).abs() + (color.g - 1.).abs() + (color.b - 1.).abs();
+        if total_distance < 0.25 { return false; }
+        // go through all other colors and check that it's not too similar
+        for c in pl_states.iter().map(|ps| &ps.color) {
+            let total_distance = (color.r - c.r).abs() + (color.g - c.g).abs() + (color.b - c.b).abs();
+            if total_distance < 0.5 { return false; }
+        }
+        true
     }
 
     pub fn draw_param_node(&self, n_id: NId, ctx: &Context) -> DrawParam {
