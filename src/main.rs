@@ -420,7 +420,7 @@ impl MainState {
                                 // calculate the boost intensity
                                 let boost = norm * 2.5;
                                 // calculate the consumption of units that this boost causes
-                                let new_consumption = *consumption /*+ (boost / 50.)*/; // TODO: reenable this when debugging stops
+                                let new_consumption = *consumption + (boost / 50.);
                                 // check if the consumption need can be met
                                 let troop_op = (*g_node_ptr).troop_of_player_mut(player_id as PlayerId);
                                 if let Some(troop) = troop_op {

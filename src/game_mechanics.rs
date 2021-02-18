@@ -162,12 +162,12 @@ impl GameState {
     }
 
     fn check_for_unit_production_producer(&mut self, dt: f32) -> bool {
-        const DURATION_BETWEEN_UNITS_PRODUCED: f32 = 0.75;
+        const DURATION_BETWEEN_UNITS_PRODUCED: f32 = 1.5;
         self.unit_production_timer_producer.check(dt, DURATION_BETWEEN_UNITS_PRODUCED)
     }
 
     fn check_for_unit_production_cancer(&mut self, dt: f32) -> bool {
-        const DURATION_BETWEEN_UNITS_PRODUCED: f32 = 2.25;
+        const DURATION_BETWEEN_UNITS_PRODUCED: f32 = 8.0;
         self.unit_production_timer_cancer.check(dt, DURATION_BETWEEN_UNITS_PRODUCED)
     }
 
@@ -442,10 +442,16 @@ impl GameEdge {
         count
     }
     fn max_unit_count(&self) -> UnitCount {
-        if self.controlled_by == CANCER_PLAYER {
-            20
-        } else {
-            99
+        match self.controlled_by {
+            CANCER_PLAYER => {
+                12
+            },
+            ANYONE_PLAYER | NO_PLAYER => {
+                99
+            },
+            _ => {
+                20
+            }
         }
     }
     fn addable_unit_count(&self) -> UnitCount { self.max_unit_count().saturating_sub(self.unit_count()) }

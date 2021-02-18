@@ -219,7 +219,7 @@ impl MainState {
         // calculate the troop positions based on the starting point of the edge and the advancement of the troops
         for adv_troop in g_edge.troop_iter() {
             // TODO: think about / test whether this is really ok, or whether we should base this on the sqrt of count instead
-            let scale = 0.45 + 0.01 * adv_troop.troop.count as f32;
+            let scale = 0.49 + 0.01 * adv_troop.troop.count as f32;
             let pos = node1.position + vec * adv_troop.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
