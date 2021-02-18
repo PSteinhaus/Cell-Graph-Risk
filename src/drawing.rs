@@ -14,13 +14,13 @@ use crate::physics::{Edge, PhysicsState, Node, EdgeType, EMPTY_NODE_RADIUS};
 
 impl MainState {
     pub fn battle_color<'a, I: Iterator<Item = &'a Troop>>(&self, ctx: &Context, troop_iter: I) -> Color {
-        Self::battle_color_static(&self.players, ctx, troop_iter)
+        Self::battle_color_static(&self.players, ctx, troop_iter).0
     }
 
-    pub fn battle_color_static<'a, I: Iterator<Item = &'a Troop>>(players: &[PlayerState], ctx: &Context, troop_iter: I) -> Color {
+    pub fn battle_color_static<'a, I: Iterator<Item = &'a Troop>>(players: &[PlayerState], ctx: &Context, troop_iter: I) -> (Color, PlayerId, f32) {
         let troops: SmallVec<[&Troop; 6]> = troop_iter.collect();
         let len = troops.len();
-        const PHASE_DURATION: f32 = 2.0;
+        const PHASE_DURATION: f32 = 3.0;
         let phase_rel = (timer::time_since_start(ctx).as_secs_f32() % PHASE_DURATION) / PHASE_DURATION;
         let phase_total: f32 = phase_rel * (len) as f32;
         let phase_floor = phase_total.floor();
@@ -31,10 +31,19 @@ impl MainState {
         } else {
             phase_total.ceil() as usize
         };
+        let (start_player, end_player) = (troops[i_start].player, troops[i_end].player);
         let color_start = Self::player_color_static(troops[i_start].player, players);
         let color_end   = Self::player_color_static(troops[i_end].player, players);
+        let col1_factor = phase_total - phase_floor;
 
-        lerp_colors(&color_start, &color_end, phase_total - phase_floor)
+        let color = lerp_colors(&color_start, &color_end, col1_factor);
+        let (current_p_id, p_id_factor) = if col1_factor > 0.5 {
+            (start_player, col1_factor)
+        } else {
+            (end_player, 1. - col1_factor)
+        };
+
+        (color, current_p_id, (p_id_factor - 0.5) * 2.)
     }
 
     pub fn player_color(&self, id: PlayerId) -> Color {
@@ -83,7 +92,7 @@ impl MainState {
         let mut p = DrawParam::new()
             .offset(Point2::new(0.5, 0.5))
             .dest(Point2::new(node.position.x, node.position.y))
-            .color(if g_node.fighting() { Self::battle_color_static(&self.players, ctx, g_node.troop_iter()) } else { self.player_color(ctrl) })
+            .color(if g_node.fighting() { Self::battle_color_static(&self.players, ctx, g_node.troop_iter()).0 } else { self.player_color(ctrl) })
             .scale([scale, scale]);
 
         let c_type = g_node.cell_type();
@@ -230,7 +239,7 @@ impl MainState {
                 .src(src_rect)
                 .dest(pos)
                 .scale(Vector2::new(scale, scale))
-                .color(Self::battle_color_static(players, ctx, fight.troop_iter()))
+                .color(Self::battle_color_static(players, ctx, fight.troop_iter()).0)
             );
         }
     }

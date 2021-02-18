@@ -115,12 +115,11 @@ impl MainState {
     }
 
     fn remove_node(&mut self, node_index: NId) -> SmallVec<[PlayerId; 4]> {
-        if self.is_unmoveable(node_index)   { self.unmovable_nodes    -= 1; }
-        if self.is_unchangeable(node_index) { self.unchangeable_nodes -= 1; }
         // if a player is on this node place him somewhere else
         // only send him to nodes that he can actually be on (i.e. his own or those in battle state carrying his troops)
         // collect players that have to be removed (in case there are any) and remove them afterwards
         let mut players_to_remove: SmallVec<[PlayerId; 4]> = smallvec![];
+        if self.is_unchangeable(node_index) { return players_to_remove; }
         for p_id in 0..self.game_state.player_node_ids.len() {
             if self.game_state.kick_player_from_node(p_id as PlayerId, node_index, &self.physics_state) {
                 players_to_remove.push(p_id as PlayerId);
@@ -607,6 +606,7 @@ enum UnitCountDrawMode {
     NoDrawing = 0,
     Units = 1,
     DesiredCount = 2,
+    Fight = 3,
 }
 
 struct PlayerState {
@@ -779,7 +779,7 @@ impl event::EventHandler for MainState {
                     let bg_scale = p.scale.x * (1. + (match c_type {
                         CellType::Cancer => 0.65,
                         CellType::Propulsion(_,_) => 0.65,
-                        _ => 0.55,
+                        _ => 0.5,
                     }) / p.scale.x);
                     p.scale = [bg_scale, bg_scale].into();
                     self.spr_b_node.add(p);
@@ -799,7 +799,7 @@ impl event::EventHandler for MainState {
             let ctrl = g_node.controlled_by();
             use UnitCountDrawMode::*;
             // behavior depends on whether this is the current node of a player
-            let (u_draw_mode, mut scale) =
+            let (mut u_draw_mode, mut scale) =
                 if let Some(p_id) = player_on_this {
                     const P_SCALE: f32 = 2.5;
                     // if it is, then it also depends on whether the player is currently changing the desired unit count
@@ -821,9 +821,22 @@ impl event::EventHandler for MainState {
                     }, N_SCALE)
                 };
             scale *= (node.radius / EMPTY_NODE_RADIUS).sqrt();
+            if g_node.fighting() {
+                u_draw_mode = Fight;
+            }
 
             match u_draw_mode {
                 NoDrawing => {},
+                Fight => {
+                    let (_col, curr_p_id, p_factor) = Self::battle_color_static(&self.players, ctx, g_node.troop_iter());
+                    let unit_count_string = if let Some(t) = g_node.troop_of_player(curr_p_id) { t.count.to_string() } else { "0".to_string() };
+                    let mut string_color = WHITE.clone();
+                    string_color.a = p_factor;
+                    println!("p_factor: {}", p_factor);
+                    println!("string_color.a: {}", string_color.a);
+                    self.spr_b_text.add(unit_count_string.as_str(),
+                                        DrawParam::default().dest(node.position).scale(Vector2::new(scale, scale)).offset(Point2::new(0.5, 0.5)).color(string_color));
+                },
                 Units => {
                     let unit_count_string = if let Some(t) = g_node.troop_of_player(ctrl) { t.count.to_string() } else { "0".to_string() };
                     self.spr_b_text.add(unit_count_string.as_str(),
