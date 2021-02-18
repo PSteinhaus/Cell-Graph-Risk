@@ -236,7 +236,7 @@ impl GameState {
         return players_to_be_removed;
     }
     /// Returns players who have to be removed.
-    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, prox_walls: &mut Vec<Vec<EId>>, e_to_b_rem: &mut Vec<EId>, n_to_be_split: &mut Vec<NId>, unchangeable_nodes: usize, unchangeable_edges: &mut usize) -> SmallVec<[PlayerId; 4]> {
+    pub fn update(&mut self, physics_state: &mut PhysicsState, dt: f32, prox_nodes: &Vec<Vec<NId>>, prox_walls: &mut Vec<Vec<EId>>, e_to_b_rem: &mut Vec<EId>, n_to_be_split: &mut Vec<NId>, unchangeable_nodes: usize, unchangeable_edges: usize) -> SmallVec<[PlayerId; 4]> {
         // update all nodes
         let distribute_troops   = self.check_for_troop_distribution(dt);
         let production_producer = self.check_for_unit_production_producer(dt);
