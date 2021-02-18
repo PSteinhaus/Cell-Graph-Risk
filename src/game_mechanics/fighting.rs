@@ -141,7 +141,7 @@ impl EdgeFight {
 
         // don't kill this fight the instant a winner emerges; instead let it move on a little so the winner can enjoy the gained acceleration
         if winner.is_some() {
-            const WIN_DURATION: f32 = 0.55;
+            const WIN_DURATION: f32 = 0.45;
             if self.win_timer >= WIN_DURATION {
                 return winner;
             } else {

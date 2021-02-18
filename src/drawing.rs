@@ -209,23 +209,27 @@ impl MainState {
         let src_rect = Self::draw_source_rect_static(&CellType::Basic, spr_b_node_dim);
         // calculate the troop positions based on the starting point of the edge and the advancement of the troops
         for adv_troop in g_edge.troop_iter() {
+            // TODO: think about / test whether this is really ok, or whether we should base this on the sqrt of count instead
+            let scale = 0.45 + 0.01 * adv_troop.troop.count as f32;
             let pos = node1.position + vec * adv_troop.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
                 .src(src_rect)
                 .dest(pos)
-                .scale(Vector2::new(0.5, 0.5))
+                .scale(Vector2::new(scale, scale))
                 .color(Self::player_color_static(adv_troop.troop.player, players))
             );
         }
         // draw the fights
         for fight in g_edge.fights.iter() {
+            let units: u16 = fight.troop_iter().map(|t| t.count as u16).sum();
+            let scale = 0.7 + 0.01 * units as f32;
             let pos = node1.position + vec * fight.advancement;
             spr_batch_troop.add(DrawParam::new()
                 .offset(Point2::new(0.5, 0.5))
                 .src(src_rect)
                 .dest(pos)
-                .scale(Vector2::new(0.75, 0.75))
+                .scale(Vector2::new(scale, scale))
                 .color(Self::battle_color_static(players, ctx, fight.troop_iter()))
             );
         }
