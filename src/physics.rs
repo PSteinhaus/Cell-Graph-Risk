@@ -214,6 +214,9 @@ impl PhysicsState {
         }
         // apply them to the nodes and actually move them
         //let nodes_prt = &self.nodes as *const Vec<Node>;
+        for i in 0..unmoveable_nodes {
+            self.nodes[i].velocity = [0., 0.].into();
+        }
         for (i, node) in self.nodes.iter_mut().skip(unmoveable_nodes).enumerate() {
             // first save the old position
             //let old_pos = node.position;

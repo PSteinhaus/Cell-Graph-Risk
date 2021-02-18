@@ -672,12 +672,12 @@ impl GameNode {
     }
 
     pub fn calc_mass(&self) -> f32 {
-        EMPTY_NODE_MASS + self.unit_count() as f32 * MASS_PER_UNIT
+        EMPTY_NODE_MASS + if let CellType::Wall = self.cell_type { self.unit_count() / 2 } else { self.unit_count() } as f32 * MASS_PER_UNIT
     }
 
     pub fn calc_radius(&self) -> f32 {
         const RAD_SCALE_FACTOR: f32 = 10.0;
-        EMPTY_NODE_RADIUS + (self.unit_count() as f32).sqrt() * RAD_SCALE_FACTOR
+        EMPTY_NODE_RADIUS + (if let CellType::Wall = self.cell_type { self.unit_count() / 2 } else { self.unit_count() } as f32).sqrt() * RAD_SCALE_FACTOR
     }
 
     pub fn unit_count(&self) -> u16 {
