@@ -3,7 +3,7 @@ use crate::{ NId, EId };
 use std::slice::{Iter, IterMut};
 use crate::helpers::{intersect, orientation};
 use smallvec::SmallVec;
-use crate::game_mechanics::GameState;
+use crate::game_mechanics::{GameState, GameNode};
 use std::cmp::min;
 
 const SPRING_CONST: f32 = 2.0;
@@ -204,7 +204,20 @@ impl PhysicsState {
         }
     }
     /// advance the simulation dt seconds
-    pub fn simulate_step(&mut self, dt: f32, prox_walls: &Vec<Vec<NId>>, edges_to_be_rem: &mut Vec<EId>, unmoveable_nodes: usize, unchangeable_edges: usize) {
+    pub fn simulate_step(&mut self, dt: f32, prox_nodes: &Vec<Vec<NId>>, prox_walls: &Vec<Vec<NId>>, edges_to_be_rem: &mut Vec<EId>, unmoveable_nodes: usize, unchangeable_edges: usize) {
+        // apply node to node collision
+        {
+            let nodes_ptr = &mut self.nodes as *mut Vec<Node>;
+            for (n_id, node) in self.nodes.iter_mut().enumerate() {
+                if node.node_collision {
+                    node.collide_with_nodes(unsafe { &mut*nodes_ptr }, &prox_nodes[n_id], dt);
+                }
+            }
+        }
+        // make sure the unmoveable nodes have no velocity
+        for i in 0..unmoveable_nodes {
+            self.nodes[i].velocity = [0., 0.].into();
+        }
         // calculate the node forces
         // also remove all edges for which the strain is too great
         for (e_id, edge) in self.edges.iter_mut().enumerate() {
@@ -212,11 +225,7 @@ impl PhysicsState {
                 edges_to_be_rem.push(e_id as EId);
             }
         }
-        // apply them to the nodes and actually move them
-        //let nodes_prt = &self.nodes as *const Vec<Node>;
-        for i in 0..unmoveable_nodes {
-            self.nodes[i].velocity = [0., 0.].into();
-        }
+        // apply the edge forces to the nodes and actually move them
         for (i, node) in self.nodes.iter_mut().skip(unmoveable_nodes).enumerate() {
             // first save the old position
             //let old_pos = node.position;
@@ -264,6 +273,7 @@ pub struct Node {
     pub(crate) edge_indices: Vec<EId>,
     pub(crate) mass: f32,
     pub(crate) radius: f32,
+    pub(crate) node_collision: bool,
 }
 
 impl PartialEq for Node {
@@ -303,6 +313,7 @@ impl Node {
             edge_indices: Vec::new(),
             mass: EMPTY_NODE_MASS,
             radius: EMPTY_NODE_RADIUS,
+            node_collision: false,
         }
     }
     fn add_edge(&mut self, edge_index: EId) {
@@ -327,6 +338,25 @@ impl Node {
     }
     fn apply_velocity(&mut self) {
         self.position += self.velocity;
+    }
+    fn collide_with_nodes(&mut self, nodes: &mut Vec<Node>, nodes_in_proximity: &Vec<NId>, dt: f32) {
+        // go through all nodes in your proximity
+        for other_n_id in nodes_in_proximity.iter() {
+            let other_node = &mut nodes[usize::from(*other_n_id)];
+            // check if this node is close enough to collide
+            let diff_vec: Vector2<f32> = other_node.position - self.position;
+            let distance = diff_vec.norm();
+            let intrusion = self.radius + other_node.radius - distance;
+            if intrusion > 0. {
+                // collide!
+                const COLLISION_STRENGTH: f32 = 64.;
+                // the push intensity is stronger when they overlap more
+                // this may make weak collisions more subtle
+                let push = diff_vec * (dt * intrusion * COLLISION_STRENGTH / distance);
+                other_node.apply_force(push);
+                self.apply_force(-push);
+            }
+        }
     }
 }
 

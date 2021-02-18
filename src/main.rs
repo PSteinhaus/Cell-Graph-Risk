@@ -100,6 +100,9 @@ impl MainState {
     fn add_node_of_type(&mut self, position: Point2<f32>, cell_type: CellType) {
         // add to physics
         self.physics_state.add_node(position);
+        if let CellType::Wall = cell_type {
+            self.physics_state.nodes.last_mut().unwrap().node_collision = true;
+        }
         // add to game state
         self.game_state.add_node(cell_type);
         // reserve a vector for the proximity state
@@ -706,7 +709,7 @@ impl event::EventHandler for MainState {
             // update the proximity state
             self.update_proximity_state(ctx);
             // update the physics simulation
-            self.physics_state.simulate_step(dur, &self.proximity_walls, &mut edges_to_be_removed, self.unmovable_nodes, self.unchangeable_edges);
+            self.physics_state.simulate_step(dur, &self.proximity_nodes, &self.proximity_walls, &mut edges_to_be_removed, self.unmovable_nodes, self.unchangeable_edges);
             Self::remove_multiple_edges_static(&mut self.physics_state, &mut self.game_state, &mut edges_to_be_removed, &mut self.proximity_walls, self.unchangeable_edges);
             // position the camera nicely
             self.position_camera(ctx);

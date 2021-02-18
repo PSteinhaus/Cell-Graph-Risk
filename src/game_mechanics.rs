@@ -614,6 +614,8 @@ impl GameNode {
                         if self.controlled_by() != NO_PLAYER {
                             self.add_units(self.controlled_by, self.troop_of_player(self.controlled_by).unwrap().count);
                         }
+                        // and turn the cell itself into a colliding object
+                        physics_state.node_at_mut(n_id).node_collision = true;
                     }
                     Split => {
                         self.cell_type = Basic;
@@ -640,6 +642,8 @@ impl GameNode {
                         let p_troop = self.troop_of_player_mut(p_id_to_half).unwrap();
                         p_troop.remove_units(p_troop.count / 2);
                     }
+                    // and turn the cell itself no longer colliding
+                    physics_state.node_at_mut(n_id).node_collision = false;
                 }
             }
         }
