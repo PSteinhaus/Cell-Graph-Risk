@@ -10,6 +10,7 @@ use crate::game_mechanics::CellType::Basic;
 use crate::helpers::*;
 use crate::physics::{PhysicsState, EMPTY_NODE_MASS, EMPTY_NODE_RADIUS};
 use crate::proximity::proximity_nodes;
+use std::f32::consts::PI;
 
 pub mod fighting;
 
@@ -385,7 +386,6 @@ impl GameState {
         }
         // try to add edges
         for (source_n_id, target_n_id) in edges_to_try_add {
-            println!("trying to add cancer edge");
             MainState::try_add_edge(self, physics_state, source_n_id, target_n_id, prox_walls, unchangeable_edges);
         }
         // update all edges
@@ -499,6 +499,7 @@ pub struct GameNode {
     cell_type: CellType,
     fight: Option<Fight>,
     troop_distribution_counter: u8,
+    /// if there is a mutation the f32 holds the duration left in seconds
     mutating: Option<(CellType, f32)>
 }
 
@@ -677,7 +678,17 @@ impl GameNode {
 
     pub fn calc_radius(&self) -> f32 {
         const RAD_SCALE_FACTOR: f32 = 10.0;
-        EMPTY_NODE_RADIUS + (if let CellType::Wall = self.cell_type { self.unit_count() / 2 } else { self.unit_count() } as f32).sqrt() * RAD_SCALE_FACTOR
+        let pure_rad = EMPTY_NODE_RADIUS + (if let CellType::Wall = self.cell_type { self.unit_count() / 2 } else { self.unit_count() } as f32).sqrt() * RAD_SCALE_FACTOR;
+        if let Some((c_type, dur_left)) = self.mutating {
+            let full_dur = mutation_duration(&c_type);
+            let x = 1. - dur_left / full_dur;
+            // to understand why I use this function just plot it in geogebra
+            let deviation = f32::sin(PI * x * (x * 9. + 1.)) * (1.+x)/10.;
+            let scale = 1. + deviation;
+            pure_rad * scale
+        } else {
+            pure_rad
+        }
     }
 
     pub fn unit_count(&self) -> u16 {

@@ -141,7 +141,7 @@ impl EdgeFight {
 
         // don't kill this fight the instant a winner emerges; instead let it move on a little so the winner can enjoy the gained acceleration
         if winner.is_some() {
-            const WIN_DURATION: f32 = 0.65;
+            const WIN_DURATION: f32 = 0.55;
             if self.win_timer >= WIN_DURATION {
                 return winner;
             } else {
@@ -439,18 +439,16 @@ impl GameEdge {
                 }
                 return false;
             }
-            else if fight_happened {
+            else {
                 if let Some((st_index, troop)) = fight.winner(dt) {
                     units_to_add.push((st_index, troop, fight.advancement));
                     return false;
                 }
                 return true;
             }
-            else { true }
         });
         for w in units_to_add {
             // add them to the edge
-            println!("adding troop");
             self.add_troop_advanced(w.0, w.1, w.2);
         }
 
