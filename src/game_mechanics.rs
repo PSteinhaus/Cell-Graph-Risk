@@ -192,15 +192,24 @@ impl GameState {
                     break;
                 }
             }
-            // if this fails just send him to some node that he can access
+            // if this fails send him to the node that is furthest away
             if searching_node {
-                for (new_n_id, game_node) in nodes.iter().enumerate() {
-                    let new_n_id = new_n_id as NId;
-                    if new_n_id != n_id && game_node.player_can_access(p_id as PlayerId) {
-                        *p_n_id = new_n_id;
-                        searching_node = false;
-                        break;
+                let mut greatest_distance = 0f32;
+                let mut chosen_n_id = None;
+                let current_pos = physics_state.node_at(n_id).position;
+                for (other_n_id, game_node) in nodes.iter().enumerate() {
+                    let other_n_id = other_n_id as NId;
+                    if other_n_id != n_id && game_node.player_can_access(p_id as PlayerId) {
+                        let distance = (current_pos - physics_state.node_at(other_n_id).position).norm();
+                        if distance > greatest_distance {
+                            greatest_distance = distance;
+                            chosen_n_id = Some(other_n_id);
+                        }
                     }
+                }
+                if let Some(new_n_id) = chosen_n_id {
+                    *p_n_id = new_n_id;
+                    searching_node = false;
                 }
             }
             // if this fails as well then the player has lost (and is removed from the game for now)

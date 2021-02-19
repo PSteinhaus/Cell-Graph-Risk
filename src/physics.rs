@@ -10,7 +10,7 @@ const SPRING_CONST: f32 = 2.0;
 pub(crate) const EMPTY_NODE_MASS: f32 = 10.0;
 pub(crate) const EMPTY_NODE_RADIUS: f32 = 64.;
 const NODE_FRICTION_FACTOR: f32 = 0.9995;
-const TENSION_FACTOR: f32 = 0.8; // = relaxed_length / distance between nodes
+const TENSION_FACTOR: f32 = 0.9; // = relaxed_length / distance between nodes
 
 pub struct PhysicsState {
     pub nodes: Vec<Node>,
@@ -130,7 +130,7 @@ impl PhysicsState {
     pub fn add_edge(&mut self, node1_index: NId, node2_index: NId) {
         let (node1, node2) = (self.node_at(node1_index), self.node_at(node2_index));
         // we have to calc the distance between the nodes first
-        let distance = distance(&node1.position, &node2.position);
+        let distance = distance(&node1.position, &node2.position) - (node1.radius + node2.radius);
         let new_edge = Edge::new(distance * TENSION_FACTOR, node1_index, node2_index);
         self.edges.push(new_edge);
         // tell the nodes that they now have a new edge
@@ -226,16 +226,10 @@ impl PhysicsState {
             }
         }
         // apply the edge forces to the nodes and actually move them
-        for (i, node) in self.nodes.iter_mut().skip(unmoveable_nodes).enumerate() {
-            // first save the old position
-            //let old_pos = node.position;
-            node.apply_forces(&self.edges, i as NId);
+        for n_id in unmoveable_nodes..self.node_count() {
+            let node = &mut self.nodes[n_id];
+            node.apply_forces(&self.edges, n_id as NId);
             node.apply_velocity();
-            // check whether this node has trespassed a wall
-            // for that go through all walls in your proximity
-            //for wall_id in prox_walls[i].iter() {
-            //    self.edges[usize::from(*wall_id)].trespass_check(i as NId, old_pos, node.position, unsafe{&*nodes_prt});
-            //}
         }
     }
 
@@ -517,8 +511,6 @@ impl Edge {
                         // find the point on the wall closest to the node
                         // (not really anymore, but at least calculate the parameter for finding it,
                         //  since we do need it to distribute the push-back)
-                        // TODO: there's quite a bit numeric instability around the joints, so maybe find a way to stabilize it;
-                        //       probably a good way to do this would be to give wall cells some collision behavior for themselves;
                         let t = n_vec.x * (pos.x - node1pos.x) + n_vec.y * (pos.y - node1pos.y);
                         //let intersection = node1pos + (t * n_vec);
                         // calculate the push

@@ -408,32 +408,60 @@ impl MainState {
                 stick_active = false;
             }
             if gamepad.is_pressed(South) {
+                let g_n_id = self.game_state.player_node_ids[usize::from(player_id)];
                 let g_node_ptr = self.game_state.player_node_mut(player_id as PlayerId) as *mut GameNode;
                 unsafe {
-                    match (*g_node_ptr).cell_type_mut() {
+                    match (*g_node_ptr).cell_type() {
                         CellType::Wall => {},   // not sure if I really want to disallow adding edges coming from walls
-                        CellType::Propulsion(consumption, current_angle) => {
+                        CellType::Propulsion(_, _) => {
                             // boost the cell into the chosen direction, burning units in the process
                             const BOOST_DEADZONE: f32 = 0.20;
                             if norm > BOOST_DEADZONE {
                                 let angle = y.atan2(x);
                                 // calculate the boost intensity
-                                let boost = norm * 2.5;
-                                // calculate the consumption of units that this boost causes
-                                let new_consumption = *consumption + (boost / 50.);
-                                // check if the consumption need can be met
-                                let troop_op = (*g_node_ptr).troop_of_player_mut(player_id as PlayerId);
-                                if let Some(troop) = troop_op {
-                                    let cost = new_consumption.floor() as UnitCount;
-                                    if troop.count > cost {
-                                        // there are enough troops to pay the consumption need and still hold the node
-                                        troop.remove_units(cost);
-                                        *consumption = new_consumption % 1.;
-                                        *current_angle = angle;
-                                        // now that the cost has been payed boost the node
-                                        let player_n_id = usize::from(self.game_state.player_node_ids[player_id]) as NId;
-                                        let force = Vector2::new(boost * angle.cos(), boost * angle.sin());
-                                        self.physics_state.node_at_mut(player_n_id).apply_force(force);
+                                let boost = norm * 1.5;
+                                // recursively collect all propulsion cells that can be reached without ever touching another type
+                                let mut prop_nodes = SmallVec::<[NId; 32]>::new();
+                                prop_nodes.push(g_n_id);
+                                loop {
+                                    // go through all nodes in the list
+                                    let mut found_nodes = SmallVec::<[NId; 16]>::new();
+                                    for n_id in prop_nodes.iter() {
+                                        // find all neighbors
+                                        for neighbor in self.physics_state.neighbors(*n_id) {
+                                            let g_node = &self.game_state.nodes[usize::from(neighbor)];
+                                            if let CellType::Propulsion(_,_) = g_node.cell_type() {
+                                                if g_node.controlled_by() == player_id as PlayerId && !prop_nodes.contains(&neighbor) {
+                                                    found_nodes.push(neighbor);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if !found_nodes.is_empty() {
+                                        prop_nodes.append(&mut found_nodes);
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                for n_id in prop_nodes {
+                                    let g_node = &mut self.game_state.nodes[usize::from(n_id)] as *mut GameNode;
+                                    if let CellType::Propulsion(consumption, current_angle) = (*g_node).cell_type_mut() {
+                                        // calculate the consumption of units that this boost causes
+                                        let new_consumption = *consumption + (boost / 50.);
+                                        // check if the consumption need can be met
+                                        let troop_op = (*g_node).troop_of_player_mut(player_id as PlayerId);
+                                        if let Some(troop) = troop_op {
+                                            let cost = new_consumption.floor() as UnitCount;
+                                            if troop.count > cost {
+                                                // there are enough troops to pay the consumption need and still hold the node
+                                                troop.remove_units(cost);
+                                                *consumption = new_consumption % 1.;
+                                                *current_angle = angle;
+                                                // now that the cost has been payed boost the node
+                                                let force = Vector2::new(boost * angle.cos(), boost * angle.sin());
+                                                self.physics_state.node_at_mut(n_id).apply_force(force);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -993,7 +1021,7 @@ impl event::EventHandler for MainState {
                         if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                             // if an edge is selected and owned by the player cut it
                             let e_ctrl = self.game_state.edges[usize::from(e_id)].controlled_by();
-                            if can_control(player_id, e_ctrl) && !self.is_unchangeable_edge(e_id) {
+                            if can_control(player_id, e_ctrl) && !self.is_unchangeable_edge(e_id) && !self.physics_state.edges[usize::from(e_id)].is_wall() {
                                 self.remove_edge(e_id);
                             }
                         }
@@ -1022,7 +1050,7 @@ impl event::EventHandler for MainState {
     fn resize_event(&mut self, ctx: &mut Context, width: f32, height: f32) {
         println!("Resized screen to {}, {}", width, height);
         // set to my native screen resolution just to have some convention to work with
-        graphics::set_screen_coordinates(ctx, Rect::new(-3840.0, -2160.0, 3.0*3840.0, 3.0*2160.0)).unwrap();
+        graphics::set_screen_coordinates(ctx, Rect::new(0., 0., 3840.0 * 4., 2160.0 * 4.)).unwrap();
     }
 }
 
@@ -1040,7 +1068,7 @@ pub fn main() -> GameResult {
         .add_resource_path(resource_dir)
         .window_mode(
             conf::WindowMode::default()
-                .fullscreen_type(conf::FullscreenType::Windowed)
+                .fullscreen_type(conf::FullscreenType::True)
                 .dimensions(1280.0, 720.0)
         )
         .window_setup(

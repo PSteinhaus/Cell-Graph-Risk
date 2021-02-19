@@ -556,7 +556,7 @@ impl GameEdge {
             let mut amount_to_add= troop.count;
             // WALL SUPERIORITY: when the player owning this wall add units to it, double the count
             if let CellType::Wall = game_node.cell_type {
-                if game_node.controlled_by() == troop.player || troop.player == ANYONE_PLAYER {
+                if game_node.controlled_by() == troop.player || game_node.controlled_by_previously == troop.player || troop.player == ANYONE_PLAYER {
                     amount_to_add *= 2;
                 }
             }
