@@ -230,6 +230,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c0496836a84f8d0495758516b8621a622beb77c0fed418570e50764093ced48"
 
 [[package]]
+name = "cell_graph_risk"
+version = "0.2.0"
+dependencies = [
+ "ggez",
+ "rand 0.7.3",
+ "smallvec 1.5.1",
+]
+
+[[package]]
 name = "cexpr"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -661,15 +670,6 @@ dependencies = [
  "toml",
  "winit",
  "zip",
-]
-
-[[package]]
-name = "ggez_test"
-version = "0.1.0"
-dependencies = [
- "ggez",
- "rand 0.7.3",
- "smallvec 1.5.1",
 ]
 
 [[package]]
