@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use ggez::nalgebra::clamp;
+use ggez::nalgebra::{clamp, Point2};
 use smallvec::{SmallVec};
 
 use fighting::{AdvancingTroop, EdgeFight, Fight, Troop};
@@ -23,6 +23,8 @@ pub struct GameState {
     pub player_edge_ids: Vec<Option<EId>>,
     /// new edges, which are added by the players, are stored here before being added
     pub player_new_edge_n_ids: Vec<Option<NId>>,
+    /// positions chosen by pressing 'A' and moving the left stick
+    pub player_chosen_pos: Vec<Option<Point2<f32>>>,
     pub nodes: Vec<GameNode>,
     pub edges: Vec<GameEdge>,
     troop_distribution_timer: Timer,
@@ -36,6 +38,7 @@ impl GameState {
             player_node_ids: Vec::new(),
             player_edge_ids: Vec::new(),
             player_new_edge_n_ids: Vec::new(),
+            player_chosen_pos : Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
             troop_distribution_timer: Timer::new(),
@@ -43,12 +46,13 @@ impl GameState {
             unit_production_timer_cancer: Timer::new(),
         }
     }
-    pub fn add_player(&mut self, start_n_id: NId, physics_state: &PhysicsState) {
+    pub fn add_player(&mut self, start_n_id: NId, physics_state: &PhysicsState, unchangeable_nodes: usize) {
         self.player_node_ids.push(start_n_id);
         self.player_edge_ids.push(None);
         self.player_new_edge_n_ids.push(None);
+        self.player_chosen_pos.push(None);
         // give him some starting units
-        self.add_units(physics_state, start_n_id, (self.player_node_ids.len()-1) as PlayerId, 20);
+        self.add_units(physics_state, start_n_id, (self.player_node_ids.len()-1) as PlayerId, 20, unchangeable_nodes);
         // and mark the node he started on as no longer being available
         self.nodes[usize::from(start_n_id)].cell_type = CellType::Basic;
     }
@@ -117,6 +121,24 @@ impl GameState {
     pub fn remove_node(&mut self, node_index: NId) {
         // remove the game node from the collection
         self.nodes.swap_remove(usize::from(node_index));
+        // update player n_ids
+        let last_n_id = self.nodes.len() as NId;
+        for p_n_id in self.player_node_ids.iter_mut() {
+            if *p_n_id == last_n_id {
+                *p_n_id = node_index;
+            }
+        }
+        // and also new_edge_n_ids
+        for p_n_id_opt in self.player_new_edge_n_ids.iter_mut() {
+            if let Some(p_n_id) = p_n_id_opt {
+                if *p_n_id == node_index {
+                    *p_n_id_opt = None;
+                }
+                else if *p_n_id == last_n_id {
+                    *p_n_id = node_index;
+                }
+            }
+        }
     }
 
     pub fn remove_edge(&mut self, edge_index: EId, n_ids: [NId; 2]) {
@@ -149,8 +171,11 @@ impl GameState {
 
     pub fn remove_player(&mut self, p_id: PlayerId) {
         // remove him from the list of player nodes and edges
-        self.player_node_ids.swap_remove(usize::from(p_id));
-        self.player_edge_ids.swap_remove(usize::from(p_id));
+        let p_id = usize::from(p_id);
+        self.player_node_ids.swap_remove(p_id);
+        self.player_edge_ids.swap_remove(p_id);
+        self.player_new_edge_n_ids.swap_remove(p_id);
+        self.player_chosen_pos.swap_remove(p_id);
         // now do housekeeping
         // TODO: remove all his units (also the travelling ones) (and thereby turn all his nodes and edges into uncontrolled territory)
 
@@ -171,22 +196,22 @@ impl GameState {
         self.unit_production_timer_cancer.check(dt, DURATION_BETWEEN_UNITS_PRODUCED)
     }
 
-    pub fn add_units(&mut self, physics_state: &PhysicsState, n_id: NId, p_id: PlayerId, unit_count: UnitCount) -> UnitCount {
+    pub fn add_units(&mut self, physics_state: &PhysicsState, n_id: NId, p_id: PlayerId, unit_count: UnitCount, unchangeable_nodes: usize) -> UnitCount {
         let (units_added, control_changed) = self.nodes[usize::from(n_id)].add_units(p_id, unit_count);
-        if control_changed { self.update_node_and_edges_control(n_id, physics_state); }
+        if control_changed { self.update_node_and_edges_control(n_id, physics_state, unchangeable_nodes); }
         units_added
     }
     /// Returns true if the player is to be removed from the game
-    pub fn kick_player_from_node(&mut self, p_id: PlayerId, n_id: NId, physics_state: &PhysicsState) -> bool {
-        Self::kick_player_from_node_static(&mut self.player_node_ids[usize::from(p_id)], p_id, n_id, physics_state, &self.nodes)
+    pub fn kick_player_from_node(&mut self, p_id: PlayerId, n_id: NId, physics_state: &PhysicsState, unchangeable_nodes: usize) -> bool {
+        Self::kick_player_from_node_static(&mut self.player_node_ids[usize::from(p_id)], p_id, n_id, physics_state, &self.nodes, unchangeable_nodes)
     }
 
-    pub fn kick_player_from_node_static(p_n_id: &mut NId, p_id: PlayerId, n_id: NId, physics_state: &PhysicsState, nodes: &[GameNode]) -> bool {
+    pub fn kick_player_from_node_static(p_n_id: &mut NId, p_id: PlayerId, n_id: NId, physics_state: &PhysicsState, nodes: &[GameNode], unchangeable_nodes: usize) -> bool {
         if *p_n_id == n_id {
             let mut searching_node = true;
             // first try to send him to a neighbor
             for neighbor in physics_state.neighbors(*p_n_id) {
-                if nodes[usize::from(neighbor)].player_can_access(p_id as PlayerId) {
+                if nodes[usize::from(neighbor)].player_can_access(p_id as PlayerId) && neighbor >= unchangeable_nodes as NId {
                     *p_n_id = neighbor;
                     searching_node = false;
                     break;
@@ -199,11 +224,42 @@ impl GameState {
                 let current_pos = physics_state.node_at(n_id).position;
                 for (other_n_id, game_node) in nodes.iter().enumerate() {
                     let other_n_id = other_n_id as NId;
-                    if other_n_id != n_id && game_node.player_can_access(p_id as PlayerId) {
-                        let distance = (current_pos - physics_state.node_at(other_n_id).position).norm();
-                        if distance > greatest_distance {
-                            greatest_distance = distance;
-                            chosen_n_id = Some(other_n_id);
+                    if other_n_id != n_id && game_node.player_can_access(p_id as PlayerId) && other_n_id >= unchangeable_nodes as NId {
+                        if let CellType::Wall = game_node.cell_type {}
+                        else {
+                            let distance = (current_pos - physics_state.node_at(other_n_id).position).norm();
+                            if distance > greatest_distance {
+                                greatest_distance = distance;
+                                chosen_n_id = Some(other_n_id);
+                            }
+                        }
+                    }
+                }
+                // if you didn't find anything do it again and include walls this time
+                if chosen_n_id.is_none() {
+                    greatest_distance = 0f32;
+                    for (other_n_id, game_node) in nodes.iter().enumerate() {
+                        let other_n_id = other_n_id as NId;
+                        if other_n_id != n_id && game_node.player_can_access(p_id as PlayerId) && other_n_id >= unchangeable_nodes as NId {
+                            let distance = (current_pos - physics_state.node_at(other_n_id).position).norm();
+                            if distance > greatest_distance {
+                                greatest_distance = distance;
+                                chosen_n_id = Some(other_n_id);
+                            }
+                        }
+                    }
+                }
+                // if you still didn't find anything do it again and even include unchangeable nodes
+                if chosen_n_id.is_none() {
+                    greatest_distance = 0f32;
+                    for (other_n_id, game_node) in nodes.iter().enumerate() {
+                        let other_n_id = other_n_id as NId;
+                        if other_n_id != n_id && game_node.player_can_access(p_id as PlayerId) {
+                            let distance = (current_pos - physics_state.node_at(other_n_id).position).norm();
+                            if distance > greatest_distance {
+                                greatest_distance = distance;
+                                chosen_n_id = Some(other_n_id);
+                            }
                         }
                     }
                 }
@@ -214,7 +270,8 @@ impl GameState {
             }
             // if this fails as well then the player has lost (and is removed from the game for now)
             if searching_node {
-                // TODO: maybe check whether the player still has some travelling units left and keep him if he has
+                *p_n_id = 0;    // dirty fix to try to patch up possible crashes
+                // TODO: maybe check whether the player still has some travelling units left and keep him if he has any
                 //       if we choose to do that though, we need to change the program to respect that there can be players without a node
                 return true;
             }
@@ -222,7 +279,7 @@ impl GameState {
         return false;
     }
 
-    fn update_node_and_edges_control(&mut self, n_id: NId, physics_state: &PhysicsState) -> SmallVec<[PlayerId; 4]> {
+    fn update_node_and_edges_control(&mut self, n_id: NId, physics_state: &PhysicsState, unchangeable_nodes: usize) -> SmallVec<[PlayerId; 4]> {
         let g_node = &self.nodes[usize::from(n_id)];
         for e_id in physics_state.node_at(n_id).edge_indices.iter() {
             // get the other node of this edge
@@ -237,7 +294,7 @@ impl GameState {
             for (p_id, p_n_id) in self.player_node_ids.iter_mut().enumerate() {
                 let p_id = p_id as PlayerId;
                 if n_id == *p_n_id && controller != p_id {
-                    if Self::kick_player_from_node_static(p_n_id, p_id, n_id, physics_state, &self.nodes) {
+                    if Self::kick_player_from_node_static(p_n_id, p_id, n_id, physics_state, &self.nodes, unchangeable_nodes) {
                         players_to_be_removed.push(p_id);
                     }
                 }
@@ -297,7 +354,7 @@ impl GameState {
                     let neighbors: SmallVec<[NId; 16]> = physics_state.neighbors(n_id as NId).collect();
                     for close_n_id in proximity_nodes(prox_nodes, n_id as NId) {
                         let close_n_id = *close_n_id;
-                        const CONNECTION_RANGE: f32 = 600.;
+                        const CONNECTION_RANGE: f32 = 800.;
                         // but don't try to connect to wall cells
                         unsafe {
                             let close_node = &(*nodes_ptr)[usize::from(close_n_id)];
@@ -407,7 +464,7 @@ impl GameState {
         // in this process players can be kicked completely out of the game, so collect those players to hand them back to the main state
         let mut players_to_be_removed = SmallVec::<[PlayerId; 4]>::new();
         for n_id in control_changed_nodes.iter() {
-            players_to_be_removed.append(&mut self.update_node_and_edges_control(*n_id, physics_state));
+            players_to_be_removed.append(&mut self.update_node_and_edges_control(*n_id, physics_state, unchangeable_nodes));
         }
         return players_to_be_removed;
     }
@@ -591,7 +648,30 @@ impl GameNode {
                 self.cell_type = *c_type;
                 self.mutating = None;
                 // depending on the type of mutation do some additional things:
+                // if the old state was "Wall" then update the physical wall state of all edges as well
+                if let Wall = old_type {
+                    // turn all edges back to normal
+                    for edge in physics_state.edges_of_node(n_id) {
+                        unsafe {
+                            let edge = &mut *edge;
+                            edge.turn_to_normal();
+                        }
+                    }
+                    // also remove WALL SUPERIORITY (half the units)
+                    let p_id_to_half = if self.controlled_by != NO_PLAYER {
+                        self.controlled_by
+                    } else {
+                        self.controlled_by_previously
+                    };
+                    if p_id_to_half != NO_PLAYER {
+                        let p_troop = self.troop_of_player_mut(p_id_to_half).unwrap();
+                        p_troop.remove_units(p_troop.count / 2);
+                    }
+                    // and turn the cell itself no longer colliding
+                    physics_state.node_at_mut(n_id).node_collision = false;
+                }
                 use CellType::*;
+                // now things depending on the new type
                 match self.cell_type {
                     Cancer => {
                         // take over all units on this node and thereby trigger a control change
@@ -638,28 +718,6 @@ impl GameNode {
                     }
                     _ => {}
                 }
-                // if the old state was "Wall" then update the physical wall state of all edges as well
-                if let Wall = old_type {
-                    // turn all edges back to normal
-                    for edge in physics_state.edges_of_node(n_id) {
-                        unsafe {
-                            let edge = &mut *edge;
-                            edge.turn_to_normal();
-                        }
-                    }
-                    // also remove WALL SUPERIORITY (half the units)
-                    let p_id_to_half = if self.controlled_by != NO_PLAYER {
-                        self.controlled_by
-                    } else {
-                        self.controlled_by_previously
-                    };
-                    if p_id_to_half != NO_PLAYER {
-                        let p_troop = self.troop_of_player_mut(p_id_to_half).unwrap();
-                        p_troop.remove_units(p_troop.count / 2);
-                    }
-                    // and turn the cell itself no longer colliding
-                    physics_state.node_at_mut(n_id).node_collision = false;
-                }
             }
         }
         (control_change, split)
@@ -702,7 +760,7 @@ impl GameNode {
             let full_dur = mutation_duration(&c_type);
             let x = 1. - dur_left / full_dur;
             // to understand why I use this function just plot it in geogebra
-            let deviation = f32::sin(PI * x * (x * 9. + 1.)) * (1.+x)/10.;
+            let deviation = f32::sin(PI * x * (x * 9. + 1.)) * (1.+x)/16.;
             let scale = 1. + deviation;
             pure_rad * scale
         } else {

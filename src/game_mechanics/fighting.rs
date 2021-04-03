@@ -22,7 +22,7 @@ impl<'a> Fight {
     }
 
     pub(crate) fn advance<I: Iterator<Item = &'a mut Troop>>(&mut self, troop_iter_mut: I, dt: f32) -> bool {
-        const DURATION_BETWEEN_BATTLES: f32 = 0.75;
+        const DURATION_BETWEEN_BATTLES: f32 = 0.35;
         if self.battle_timer.check(dt, DURATION_BETWEEN_BATTLES) {
             // let the troops battle each other
             let mut troops: SmallVec<[&mut Troop; 8]> = troop_iter_mut.collect();
@@ -325,7 +325,7 @@ impl Troop {
     fn max_unit_count(&self) -> UnitCount {
         match self.player {
             ANYONE_PLAYER => 2,
-            CANCER_PLAYER => 11,
+            CANCER_PLAYER => 20,
             _ => 99,
         }
     }

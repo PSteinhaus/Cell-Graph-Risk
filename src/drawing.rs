@@ -260,7 +260,7 @@ impl MainState {
         if s_x == f32::INFINITY {
             return;
         }
-        const BORDER: f32 = 2048.;
+        const BORDER: f32 = 1500.;
         let (mut w, mut h) = (b_x - s_x + (BORDER * 2.), b_y - s_y + (BORDER * 2.));
         // make sure the ratio matches the screen ratio
         let screen_size = drawable_size(ctx);

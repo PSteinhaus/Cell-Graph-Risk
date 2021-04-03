@@ -313,7 +313,8 @@ impl MainState {
             (11, 65),
             (12, 65),
         ];
-        /*
+
+/*
         let edges_to_add = [
             (0, 1),
             (1, 2),
@@ -327,7 +328,8 @@ impl MainState {
             (9, 10),
             (10, 11),
         ];
-         */
+*/
+
 
         for (start, end) in edges_to_add.iter() {
             self.add_edge(*start as NId, *end as NId);

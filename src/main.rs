@@ -17,7 +17,7 @@ use ggez::graphics::{Rect, Image, DrawParam, Color, WHITE, BLACK};
 use ggez::graphics::spritebatch::SpriteBatch;
 use ggez::input::gamepad::{GamepadId, gamepad};
 use ggez::event::{Button, Axis};
-use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16};
+use crate::helpers::{angle_diff_abs, u16_to_btn, btn_to_u16, intersect};
 use ggez::input::gamepad::gilrs::ev::Button::South;
 use smallvec::{SmallVec, smallvec};
 use std::mem::transmute;
@@ -107,11 +107,6 @@ impl MainState {
         self.game_state.add_node(cell_type);
         // reserve a vector for the proximity state
         self.proximity_nodes.push(Vec::new());
-
-        // reserve a text for unit count
-        //let txt_fragm = TextFragment::new("42").scale(Scale::uniform(200.0));
-        //let txt = Text::new(txt_fragm);
-        //self.unit_count_texts.push(txt);
     }
 
     fn remove_node(&mut self, node_index: NId) -> SmallVec<[PlayerId; 4]> {
@@ -121,19 +116,22 @@ impl MainState {
         let mut players_to_remove: SmallVec<[PlayerId; 4]> = smallvec![];
         if self.is_unchangeable(node_index) { return players_to_remove; }
         for p_id in 0..self.game_state.player_node_ids.len() {
-            if self.game_state.kick_player_from_node(p_id as PlayerId, node_index, &self.physics_state) {
+            if self.game_state.kick_player_from_node(p_id as PlayerId, node_index, &self.physics_state, self.unchangeable_nodes) {
                 players_to_remove.push(p_id as PlayerId);
             }
         }
-        for p_id in players_to_remove.iter() {
-            self.remove_player(*p_id);
-        }
-        // first remove all edges to this node
-        while !self.physics_state.node_at(node_index).edge_indices.is_empty() {
-            let e_id = *self.physics_state.node_at(node_index).edge_indices.last().unwrap();
-            self.remove_edge(e_id);
-        }
         // remove it from the proximity state
+        // go through all n_ids saved in proximity_nodes and update them if necessary
+        let last_n_id = (self.node_count() - 1) as NId;
+        for vec in self.proximity_nodes.iter_mut() {
+            vec.retain(|n_id| *n_id != node_index);
+            for n_id in vec.iter_mut() {
+                if *n_id == last_n_id {
+                    *n_id = node_index;
+                    break;
+                }
+            }
+        }
         self.proximity_nodes.swap_remove(usize::from(node_index));
         // go through all n_ids saved in proximity_walls and update them if necessary
         let last_n_id = (self.node_count() - 1) as NId;
@@ -146,6 +144,14 @@ impl MainState {
                 }
             }
         }
+        for p_id in players_to_remove.iter() {
+            self.remove_player(*p_id);
+        }
+        // first remove all edges to this node
+        while !self.physics_state.node_at(node_index).edge_indices.is_empty() {
+            let e_id = *self.physics_state.node_at(node_index).edge_indices.last().unwrap();
+            self.remove_edge(e_id);
+        }
         // remove from game state
         self.game_state.remove_node(node_index);
         // remove it from physics
@@ -157,11 +163,15 @@ impl MainState {
     fn node_count(&self) -> usize { self.physics_state.node_count() }
     fn edge_count(&self) -> usize { self.physics_state.edge_count() }
 
+    /// DEBUG: This function is currently deactivated, since removing a player can
+    /// currently lead to travelling units with undefined properties and therefore crashes (that is, if the removed player has had any).
     fn remove_player(&mut self, p_id: PlayerId) {
+        /*
         // remove him from the game state
         self.game_state.remove_player(p_id);
         // remove the player from the collection
         self.players.swap_remove(usize::from(p_id));
+        */
     }
 
     fn add_edge(&mut self, node1_index: NId, node2_index: NId) -> bool {
@@ -257,8 +267,9 @@ impl MainState {
 
             // push the nodes away from each other
             let angle = rand::thread_rng().gen_range(0f32, 2. * PI);
-            const PUSH_SCALE: f32 = 5.;
+            const PUSH_SCALE: f32 = 3.4;
             let push = Vector2::<f32>::from([angle.cos(), angle.sin()]) * PUSH_SCALE;
+            let old_velocity = p_node.velocity;
             p_node.add_velocity(push);
 
             let new_n_id = (self.node_count() - 1) as NId;
@@ -286,7 +297,8 @@ impl MainState {
             new_g_node.set_controlled_by(p_id);
 
             // get pushed
-            new_p_node.add_velocity(-push);
+            new_p_node.add_velocity(old_velocity); // first make its movement identical to the old node
+            new_p_node.add_velocity(-push); // then push it into the other direction
         }
     }
 
@@ -321,7 +333,7 @@ impl MainState {
             self.players.push(PlayerState::new(gamepad_id, color));
             let i = rng.gen_range(0, start_n_ids.len());
             let start_n_id = start_n_ids[i];
-            self.game_state.add_player(start_n_id, &self.physics_state);
+            self.game_state.add_player(start_n_id, &self.physics_state, self.unchangeable_nodes);
             return true;
         } else {
             return false;
@@ -397,7 +409,7 @@ impl MainState {
 
             // HANDLE STICK INPUT
             use Axis::*;
-            const DEADZONE: f32 = 0.70;
+            const DEADZONE: f32 = 0.10;
             // left stick
             let mut stick_active = true;
             let (x, y) = (gamepad.value(LeftStickX), -gamepad.value(LeftStickY));
@@ -419,7 +431,7 @@ impl MainState {
                             if norm > BOOST_DEADZONE {
                                 let angle = y.atan2(x);
                                 // calculate the boost intensity
-                                let boost = norm * 1.5;
+                                let boost = norm * 1.85;
                                 // recursively collect all propulsion cells that can be reached without ever touching another type
                                 let mut prop_nodes = SmallVec::<[NId; 32]>::new();
                                 prop_nodes.push(g_n_id);
@@ -447,7 +459,7 @@ impl MainState {
                                     let g_node = &mut self.game_state.nodes[usize::from(n_id)] as *mut GameNode;
                                     if let CellType::Propulsion(consumption, current_angle) = (*g_node).cell_type_mut() {
                                         // calculate the consumption of units that this boost causes
-                                        let new_consumption = *consumption + (boost / 50.);
+                                        let new_consumption = *consumption + (boost / 40.);
                                         // check if the consumption need can be met
                                         let troop_op = (*g_node).troop_of_player_mut(player_id as PlayerId);
                                         if let Some(troop) = troop_op {
@@ -470,6 +482,36 @@ impl MainState {
                             // new edge selection starts
                             let mut chosen_node = NO_NODE;
                             if stick_active {
+                                const NEW_EDGE_RANGE: f32 = 1200.0;
+                                // calculate a position based on where the player is going into the direction the player points towards
+                                let player_n_id = usize::from(self.game_state.player_node_ids[player_id]);
+                                let player_pos = self.physics_state.node_at(player_n_id as NId).position;
+                                //const STICK_DISTANCE_FACTOR: f32 = 200.;
+                                let stick_distance = (x*x + y*y).sqrt();
+                                let native_stick_vec = Vector2::<f32>::new(x,y);
+                                let stick_vec = native_stick_vec / native_stick_vec.norm() * if stick_distance <= 1. { stick_distance } else { 1. };
+                                let chosen_pos = (player_pos.coords + stick_vec * NEW_EDGE_RANGE).into();
+                                self.game_state.player_chosen_pos[player_id] = Some(chosen_pos);
+                                // go through all nodes and find the one closest to this position
+                                let mut smallest_distance: f32 = 600.;  // the worst fit still needs to be better than this
+                                for (n_id, node) in self.physics_state.node_iter().enumerate() {
+                                    if n_id == player_n_id { continue; }
+                                    let vec = node.position - player_pos;
+                                    // first check if it's in range
+                                    if vec.norm() <= NEW_EDGE_RANGE {
+                                        // then check if this edge already exists
+                                        if self.physics_state.neighbors(player_n_id as NId).find(|id| *id == n_id as NId).is_none() {
+                                            // calculate the distance from the chosen position
+                                            let distance = (chosen_pos - node.position).norm();
+                                            if distance < smallest_distance {
+                                                smallest_distance = distance;
+                                                chosen_node = n_id as NId;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                /*
                                 let angle = y.atan2(x);
                                 let player_n_id = usize::from(self.game_state.player_node_ids[player_id]);
                                 // find the target node for the new edge
@@ -478,7 +520,7 @@ impl MainState {
                                 const NEW_EDGE_RANGE: f32 = 800.0;
                                 for (n_id, node) in self.physics_state.node_iter().enumerate() {
                                     if n_id == player_n_id { continue; }
-                                    let vec = node.position - self.physics_state.node_at(player_n_id as NId).position;
+                                    let vec = node.position - player_pos;
                                     // first check if it's in range
                                     if vec.norm() <= NEW_EDGE_RANGE {
                                         // then check if this edge already exists
@@ -494,6 +536,9 @@ impl MainState {
                                         }
                                     }
                                 }
+                                 */
+                            } else {
+                                self.game_state.player_chosen_pos[player_id] = None;
                             }
                             self.game_state.player_new_edge_n_ids[player_id] = if chosen_node == NO_NODE {
                                 // reset the new edge selection (in other words set the new edge target back to None)
@@ -560,8 +605,9 @@ impl MainState {
             }
             // right stick
             let mut stick_active = true;
+            const RIGHT_DEADZONE: f32 = 0.5;
             let (x, y) = (gamepad.value(RightStickX), -gamepad.value(RightStickY));
-            if (x.powf(2.0) + y.powf(2.0)).sqrt() < DEADZONE {
+            if (x.powf(2.0) + y.powf(2.0)).sqrt() < RIGHT_DEADZONE {
                 stick_active = false;
             }
             if stick_active {
@@ -589,7 +635,7 @@ impl MainState {
             // handle button input
             if gamepad.is_pressed(Button::West) {
                 // "X": reduce selected edge length
-                const SHORTENING_SPEED: f32 = 500.0;
+                const SHORTENING_SPEED: f32 = 400.0;
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     // if an edge is selected and owned by the player shorten it
                     if can_control(player_id as PlayerId, self.game_state.edges[usize::from(e_id)].controlled_by()) && !(e_id < self.unchangeable_edges as EId) {
@@ -599,7 +645,7 @@ impl MainState {
             }
             if gamepad.is_pressed(Button::North) {
                 // "Y": increase selected edge length
-                const LENGTHENING_SPEED: f32 = 500.0;
+                const LENGTHENING_SPEED: f32 = 400.0;
                 if let Some(e_id) = self.game_state.player_edge_ids[usize::from(player_id)] {
                     // if an edge is selected and owned by the player shorten it
                     if can_control(player_id as PlayerId, self.game_state.edges[usize::from(e_id)].controlled_by()) && !(e_id < self.unchangeable_edges as EId) {
@@ -611,7 +657,7 @@ impl MainState {
     }
 
     pub fn try_add_edge(g_state: &mut GameState, p_state: &mut PhysicsState, start_n_id: NId, target_n_id: NId, prox_walls: &mut Vec<Vec<NId>>, unchangeable_edges: usize) -> bool {
-        const NEW_EDGE_UNIT_COST: UnitCount = 2;
+        const NEW_EDGE_UNIT_COST: UnitCount = 0;
         let game_node = &mut g_state.nodes[usize::from(start_n_id)];
         let ctrl = game_node.controlled_by();
         if ctrl != NO_PLAYER {
@@ -793,6 +839,17 @@ impl event::EventHandler for MainState {
             let bg_scale = (1. + (0.5 / p.scale.x)) * p.scale.x;
             p.scale = [bg_scale, bg_scale].into();
             self.spr_b_node.add(p);
+            // also draw their chosen positions
+            if let Some(pos) = &self.game_state.player_chosen_pos[i] {
+                let p = self.draw_param_node(self.game_state.player_node_ids[i], ctx)
+                    .scale(Vector2::<f32>::new(0.75, 0.75))
+                    .dest(*pos);
+                let mut p_bg = p.color( WHITE );
+                let bg_scale = (1. + (0.5 / p.scale.x)) * p.scale.x;
+                p_bg.scale = [bg_scale, bg_scale].into();
+                self.spr_b_node.add(p_bg);
+                self.spr_b_node.add(p);
+            }
         }
         // Fill the nodes spritebatch
         for (i, node) in self.physics_state.node_iter().enumerate() {
@@ -1035,12 +1092,59 @@ impl event::EventHandler for MainState {
                     // check if the player controls the node completely
                     let p_n_id = self.game_state.player_node_ids[usize::from(player_id)];
                     Self::try_add_edge(&mut self.game_state, &mut self.physics_state, p_n_id, target_n_id, &mut self.proximity_walls, self.unchangeable_edges);
+                } else if self.game_state.player_chosen_pos[usize::from(player_id)].is_some() {
+                    // there is no new edge to add, so try to add a node at the position (and also an edge to that point)
+                    let p_n_id = self.game_state.player_node_ids[usize::from(player_id)];
+                    let player_node = &mut self.game_state.nodes[usize::from(p_n_id)];
+                    if player_node.controlled_by() == player_id {
+                        let mut add_node = true;
+                        // first check whether a wall blocks your way
+                        let n_pos_0 = self.physics_state.nodes[usize::from(p_n_id)].position;
+                        let n_pos_1 = self.game_state.player_chosen_pos[usize::from(player_id)].unwrap();
+                        for edge in self.physics_state.edges.iter() {
+                            if edge.is_wall() {
+                                // if this edge contains the node that we try to connect from
+                                // then we want to ignore any possible collisions
+                                if !edge.node_indices.contains(&p_n_id)
+                                {
+                                    let (n_id0, n_id1) = (edge.node_indices[0], edge.node_indices[1]);
+                                    let start = self.physics_state.node_at(n_id0).position;
+                                    let end   = self.physics_state.node_at(n_id1).position;
+                                    if intersect(start, end, n_pos_0, n_pos_1) {
+                                        add_node = false;
+                                    }
+                                }
+                            }
+                        }
+                        if add_node {
+                            add_node = false;
+                            // check if the cost for adding a new node can be payed
+                            const NODE_COST: UnitCount = 10;
+                            if let Some(troop) = player_node.troop_of_player_mut(player_id) {
+                                if troop.count > NODE_COST {
+                                    // add the node and pay the cost
+                                    troop.remove_units(NODE_COST);
+                                    add_node = true;
+                                }
+                            }
+                            if add_node {
+                                let added_n_id = self.node_count();
+                                self.add_node_of_type(self.game_state.player_chosen_pos[usize::from(player_id)].unwrap(), CellType::Basic);
+                                self.game_state.nodes[added_n_id].add_units(player_id, 1);
+                                // also add an edge
+                                self.add_edge(p_n_id, added_n_id as NId);
+                            }
+                        }
+                    }
                 }
+
                 self.game_state.player_new_edge_n_ids[usize::from(player_id)] = None;
+                // reset the chosen pos
+                self.game_state.player_chosen_pos[usize::from(player_id)] = None;
             }
             _ => {}
         }
-        // the player identity needs to be checked here again, because due to the removal of a node
+        // the player identity needs to be checked here again, because due to the removal of a node (and thereby possibly a player)
         // the player ids can change (and thereby get invalidated)
         if !player_removed {
             self.players[usize::from(player_id)].reset_button_pressed_duration(btn);
@@ -1049,8 +1153,9 @@ impl event::EventHandler for MainState {
 
     fn resize_event(&mut self, ctx: &mut Context, width: f32, height: f32) {
         println!("Resized screen to {}, {}", width, height);
-        // set to my native screen resolution just to have some convention to work with
-        graphics::set_screen_coordinates(ctx, Rect::new(0., 0., 3840.0 * 4., 2160.0 * 4.)).unwrap();
+        // this only gets called upon startup, so I use it here to initialize the camera
+        const LVL_SIZE_FACTOR: f32 = 4.;  // as the name suggests this depends on the size of the level
+        graphics::set_screen_coordinates(ctx, Rect::new(0., 0., 3840.0 * LVL_SIZE_FACTOR, 2160.0 * LVL_SIZE_FACTOR)).unwrap();
     }
 }
 
@@ -1069,7 +1174,8 @@ pub fn main() -> GameResult {
         .window_mode(
             conf::WindowMode::default()
                 .fullscreen_type(conf::FullscreenType::True)
-                .dimensions(1280.0, 720.0)
+                //.fullscreen_type(conf::FullscreenType::Windowed)
+                //.dimensions(1280.0, 720.0)
         )
         .window_setup(
             conf::WindowSetup::default().samples(

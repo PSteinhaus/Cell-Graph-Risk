@@ -10,7 +10,7 @@ const SPRING_CONST: f32 = 2.0;
 pub(crate) const EMPTY_NODE_MASS: f32 = 10.0;
 pub(crate) const EMPTY_NODE_RADIUS: f32 = 64.;
 const NODE_FRICTION_FACTOR: f32 = 0.9995;
-const TENSION_FACTOR: f32 = 0.9; // = relaxed_length / distance between nodes
+const TENSION_FACTOR: f32 = 0.97; // = relaxed_length / distance between nodes
 
 pub struct PhysicsState {
     pub nodes: Vec<Node>,
@@ -263,7 +263,7 @@ impl PhysicsState {
 
 pub struct Node {
     pub(crate) position: Point2<f32>,
-    velocity: Vector2<f32>,
+    pub(crate) velocity: Vector2<f32>,
     pub(crate) edge_indices: Vec<EId>,
     pub(crate) mass: f32,
     pub(crate) radius: f32,
@@ -442,7 +442,7 @@ impl Edge {
     }
     /// reaches 1 when the length differs from the relaxed length by a certain percentage
     pub fn strain_static(ratio_length_with_radii_to_relaxed_length: f32, is_wall: bool) -> f32 {
-        (ratio_length_with_radii_to_relaxed_length - 1.).abs() * if is_wall { 2.5 } else { 1.5 }
+        (ratio_length_with_radii_to_relaxed_length - 1.).abs() * if is_wall { 3.25 } else { 2. }
     }
 
     /// Returns true if the strain is too great and the edge has to be removed.
