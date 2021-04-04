@@ -1,7 +1,7 @@
 # Cell-Graph-Risk
 A small somewhat risk-like game I've been thinking about for a while now. It is based upon a special physics simulation with elastic graphs at its core. I've implemented it to learn some Rust, using the wonderful [ggez](https://github.com/ggez/ggez).
 
-![](https://imgur.com/PbZaaaL)
+![](https://media.giphy.com/media/ScL9u5ICO7JkTSa2dF/giphy.gif)
 
 ## Gameplay
 It's a local mutliplayer strategy game where players create and cut connections between cells and then jump between them and send units across. They battle for domination over the white cells, which are able to create new units.
