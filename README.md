@@ -41,4 +41,5 @@ It's a local mutliplayer strategy game where players create and cut connections 
 |digipad-LEFT| mutate into propulsion cell
 |digipad-DOWN| mutate into cancer cell
 |Select| change displayed information
+
 Press any button to join.
