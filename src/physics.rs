@@ -1,7 +1,7 @@
 use ggez::nalgebra::{Point2, Vector2, distance, norm, clamp};
 use crate::{ NId, EId };
 use std::slice::{Iter, IterMut};
-use crate::helpers::{intersect, orientation};
+use crate::helpers::{intersect, orientation, perp_vector_clockwise};
 use smallvec::SmallVec;
 use crate::game_mechanics::{GameState, GameNode};
 use std::cmp::min;
@@ -478,13 +478,7 @@ impl Edge {
             if is_wall {
                 // calculate a vector perpendicular to you
                 // so that it lies on your right side and is normalized
-                let perp: Vector2<f32> = if n_vec.y == 0. {
-                    [0., if n_vec.x.is_sign_positive() { -1. } else { 1.}].into()
-                } else {
-                    let x: f32 = if n_vec.y.is_sign_positive() { 1.} else { -1. };
-                    let unnormalized_perp: Vector2<f32> = [x, x * (-n_vec.x) / n_vec.y].into();
-                    unnormalized_perp / unnormalized_perp.norm()
-                };
+                let perp = perp_vector_clockwise(n_vec);
 
                 for n_id in prox_wall.iter() {
                     let node = &mut nodes[usize::from(*n_id)];

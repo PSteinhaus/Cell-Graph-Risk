@@ -106,3 +106,13 @@ pub fn intersect(start1: Point2<f32>, end1: Point2<f32>, start2: Point2<f32>, en
 
     false
 }
+
+/// a perpendicular vector lying on the left side
+pub fn perp_vector_counter_clockwise(vec: Vector2<f32>) -> Vector2<f32> {
+    [-vec.y, vec.x].into()
+}
+
+/// a perpendicular vector lying on the right side
+pub fn perp_vector_clockwise(vec: Vector2<f32>) -> Vector2<f32> {
+    [vec.y, -vec.x].into()
+}
