@@ -219,7 +219,13 @@ impl MainState {
 
     fn remove_multiple_edges_static(p_state: &mut PhysicsState, g_state: &mut GameState, edges_to_remove: &mut Vec<EId>, prox_walls: &mut Vec<Vec<NId>>, unchangeable_edges: usize) {
         // first we remove all unchangeable edges from the vector to make sure that the step described next will work as intended
-        edges_to_remove.retain(|e_id| *e_id >= unchangeable_edges as EId);
+        let mut already_seen = SmallVec::<[EId;16]>::new();  // first remove any duplicates
+        edges_to_remove.retain(|e_id| if already_seen.contains(e_id) {
+            false
+        } else {
+            already_seen.push(*e_id);
+            *e_id >= unchangeable_edges as EId
+        });
         // here we need to use some caution
         // removing an edge will invalidate the EId of the last edge
         // therefore we need to check whether the last edge is contained in this collection
